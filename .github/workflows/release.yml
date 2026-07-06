@@ -26,6 +26,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set version from tag
+        shell: pwsh
+        working-directory: tauri
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Error "Tag '$tag' must be X.Y.Z semver (e.g. v1.2.3). Aborting."
+            exit 1
+          }
+          Write-Host "Stamping internal version $version from tag $tag"
+          foreach ($f in @('src-tauri/tauri.conf.json', 'package.json')) {
+            (Get-Content $f -Raw) -replace '"version":\s*"[^"]*"', "`"version`": `"$version`"" |
+              Set-Content $f -Encoding utf8 -NoNewline
+          }
+          (Get-Content src-tauri/Cargo.toml -Raw) -replace '(?m)^version = "[^"]*"', "version = `"$version`"" |
+            Set-Content src-tauri/Cargo.toml -Encoding utf8 -NoNewline
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
