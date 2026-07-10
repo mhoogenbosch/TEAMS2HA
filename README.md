@@ -13,6 +13,15 @@ Download the latest version from https://github.com/jimmyeao/TEAMS2HA/releases (
 <img width="822" height="712" alt="image" src="https://github.com/user-attachments/assets/5595f5ff-e4f3-44e6-8054-1cc381370fab" />
 
 
+
+<h2>Fork changes (mhoogenbosch/TEAMS2HA)</h2>
+
+This fork adds two things to the Tauri app (and equivalent fixes to the legacy WPF app):
+
+<b>Home detection</b> — optionally only connect to MQTT while on your home network. Detection is based on the MAC address of the default IPv4 gateway (ARP), so it works on Wi-Fi and wired/docked connections, needs no location permission, and cannot be fooled by a VPN tunnel or a foreign network using the same subnet. Configure it in Settings &rarr; Home Detection ("Use Current Network" fills in the current gateway's MAC). Leave empty to always connect (upstream behaviour).
+
+<b>Availability (Last Will)</b> — all entities now carry an MQTT availability topic (<code>teams2ha/&lt;prefix&gt;/availability</code>) with a retained Last Will. When the app exits, the laptop sleeps or you leave the home network, Home Assistant marks every Teams2HA entity <i>unavailable</i> instead of keeping the last retained state forever (no more <code>is_in_meeting</code> stuck 'on' after closing the laptop mid-call).
+
 <h2>MQTT</h2>
 
 Provide your MQTT instance details (IP, username and password) The password is encrypted before being saved to the settings file and is not stored in clear text.
