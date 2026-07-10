@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 /// Home-network detection based on the MAC address of the default IPv4 gateway.
 ///
@@ -30,12 +30,15 @@ pub fn current_gateway_mac() -> Option<String> {
 /// Spawns the poller. Sends the initial state immediately, then emits on every
 /// home/away transition. Flipping to away requires two consecutive misses so a
 /// transient ARP failure doesn't drop the connection.
-pub fn start(tx: mpsc::Sender<bool>) {
+///
+/// The configured MAC arrives via a watch channel (updated on settings save), so the
+/// poller never touches the settings file and reacts to a config change immediately.
+pub fn start(tx: mpsc::Sender<bool>, mut mac_rx: watch::Receiver<String>) {
     tauri::async_runtime::spawn(async move {
         let mut last: Option<bool> = None;
         let mut away_strikes: u8 = 0;
         loop {
-            let configured = crate::settings::Settings::load().home_gateway_mac;
+            let configured = mac_rx.borrow_and_update().clone();
             // SendARP can block for up to a second — keep it off the async runtime.
             let home = tokio::task::spawn_blocking(move || is_home(&configured))
                 .await
@@ -60,7 +63,17 @@ pub fn start(tx: mpsc::Sender<bool>) {
                     break;
                 }
             }
-            tokio::time::sleep(Duration::from_secs(20)).await;
+
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(20)) => {}
+                changed = mac_rx.changed() => {
+                    if changed.is_err() {
+                        break; // Sender dropped — app shutting down.
+                    }
+                    // Config changed: re-evaluate right away with fresh strikes.
+                    away_strikes = 0;
+                }
+            }
         }
     });
 }
