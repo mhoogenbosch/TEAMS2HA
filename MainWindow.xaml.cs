@@ -99,6 +99,12 @@ namespace TEAMS2HA
 
         public bool RunAtWindowsBoot { get; set; }
         public bool RunMinimized { get; set; }
+
+        // MAC address(es) of the home router/gateway. When set, the app only connects to MQTT
+        // (and only publishes state) while the default gateway's MAC matches — i.e. at home.
+        // Empty = feature disabled, always connect. Multiple MACs may be comma-separated.
+        public string HomeGatewayMac { get; set; } = "";
+
         public string SensorPrefix { get; set; }
         public string Theme { get; set; }
         public string ColorScheme { get; set; } = "DeepPurple / Lime";
@@ -259,6 +265,7 @@ namespace TEAMS2HA
         private CameraMonitor _cameraMonitor;
         private MicrophoneMonitor _microphoneMonitor;
         private ProcessWatcher _processWatcher;
+        private HomeNetworkMonitor _homeMonitor;
 
         #endregion Private Fields
 
@@ -318,6 +325,9 @@ namespace TEAMS2HA
             CreateNotifyIconContextMenu();
             // Create a new instance of the MQTT Service class
 
+            // Home-network detection: gate the MQTT connection on being at home
+            _homeMonitor = new HomeNetworkMonitor(() => _settings.HomeGatewayMac);
+            _homeMonitor.HomeStateChanged += OnHomeStateChanged;
 
             // Initialize connections
             InitializeConnections();
@@ -454,6 +464,19 @@ namespace TEAMS2HA
                 MqttService.Instance.Initialize(_settings, _settings.SensorPrefix, sensorNames);
                 _mqttService = MqttService.Instance;
                 _mqttService.StatusUpdated += UpdateMqttStatus;
+                // Fires on every (re)connect after availability + resubscriptions are restored:
+                // republish the real current state so transitions missed while offline catch up.
+                _mqttService.ConnectionEstablished += () =>
+                {
+                    _ = _mqttService.PublishConfigurations(BuildMeetingUpdateFromState(), _settings, forcePublish: true);
+                };
+            }
+
+            if (!_homeMonitor.IsHome)
+            {
+                Log.Information("Not on the home network - MQTT connection deferred until home.");
+                Dispatcher.Invoke(() => UpdateStatusMenuItems());
+                return;
             }
 
             // Attempt MQTT connection (may fail on first run with empty settings)
@@ -462,13 +485,40 @@ namespace TEAMS2HA
                 await _mqttService.ConnectAsync(AppSettings.Instance);
                 await _mqttService.SubscribeAsync($"homeassistant/switch/{deviceid.ToLower()}/+/set", MqttQualityOfServiceLevel.AtLeastOnce);
                 await _mqttService.SubscribeAsync($"homeassistant/binary_sensor/{deviceid.ToLower()}/+/state", MqttQualityOfServiceLevel.AtLeastOnce);
-                _ = _mqttService.PublishConfigurations(null!, _settings);
             }
             catch (Exception ex)
             {
                 Log.Error($"Failed to connect to MQTT: {ex.Message}");
             }
 
+            Dispatcher.Invoke(() => UpdateStatusMenuItems());
+        }
+
+        private async void OnHomeStateChanged(bool isHome)
+        {
+            try
+            {
+                if (isHome)
+                {
+                    Log.Information("Arrived on home network - connecting to MQTT.");
+                    if (_mqttService == null || !_mqttService.IsConnected)
+                    {
+                        await InitializeConnections();
+                    }
+                }
+                else
+                {
+                    Log.Information("Left home network - marking offline and disconnecting MQTT.");
+                    if (_mqttService != null)
+                    {
+                        await _mqttService.GoOfflineAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error handling home state change: {message}", ex.Message);
+            }
             Dispatcher.Invoke(() => UpdateStatusMenuItems());
         }
 
@@ -635,15 +685,13 @@ namespace TEAMS2HA
             _cameraMonitor?.Dispose();
             _microphoneMonitor?.Dispose();
             _processWatcher = null;
+            _homeMonitor?.Dispose();
 
             if (_mqttService != null)
             {
-                Log.Information("ExitMenuItem_Click: Disconnecting MQTT client...");
-                if (_mqttService.IsConnected)
-                {
-                    await _mqttService.DisconnectAsync();
-                    Log.Debug("MQTT Client Disconnected");
-                }
+                Log.Information("ExitMenuItem_Click: Marking offline and disconnecting MQTT client...");
+                await _mqttService.GoOfflineAsync();
+                Log.Debug("MQTT Client Disconnected");
 
                 // Dispose the service
                 _mqttService.Dispose();
@@ -712,6 +760,7 @@ namespace TEAMS2HA
                 SensorPrefixBox.Text = _settings.SensorPrefix;
             }
             MqttPort.Text = _settings.MqttPort;
+            HomeGatewayMacBox.Text = _settings.HomeGatewayMac ?? "";
 
             // Initialize theme controls
             DarkModeToggle.IsChecked = _settings.Theme == "Dark";
@@ -827,6 +876,7 @@ namespace TEAMS2HA
             var oldIgnoreCertificateErrors = settings.IgnoreCertificateErrors;
             var oldUseWebsockets = settings.UseWebsockets;
             var oldSensorPrefix = settings.SensorPrefix;
+            var oldHomeGatewayMac = settings.HomeGatewayMac;
 
             // Update the settings from UI components
             Dispatcher.Invoke(() =>
@@ -841,6 +891,7 @@ namespace TEAMS2HA
                 settings.UseWebsockets = Websockets.IsChecked ?? false;
                 settings.RunAtWindowsBoot = RunAtWindowsBootCheckBox.IsChecked ?? false;
                 settings.SensorPrefix = string.IsNullOrEmpty(SensorPrefixBox.Text) ? System.Environment.MachineName : SensorPrefixBox.Text;
+                settings.HomeGatewayMac = HomeGatewayMacBox.Text?.Trim() ?? "";
                 settings.Theme = DarkModeToggle.IsChecked == true ? "Dark" : "Light";
                 if (ColorSchemeComboBox.SelectedItem is ColorThemePreset selectedPreset)
                     settings.ColorScheme = selectedPreset.DisplayName;
@@ -859,8 +910,16 @@ namespace TEAMS2HA
 
             // Save the updated settings to file
             settings.SaveSettingsToFile();
-            // only reconnect if the mqtt settings have changed
-            if (mqttSettingsChanged && _mqttService != null)
+
+            // Re-evaluate home state when the configured gateway MAC changed; this connects or
+            // disconnects via OnHomeStateChanged when the state flips.
+            if (oldHomeGatewayMac != settings.HomeGatewayMac)
+            {
+                _homeMonitor?.Evaluate();
+            }
+
+            // only reconnect if the mqtt settings have changed (and we're home)
+            if (mqttSettingsChanged && _mqttService != null && _homeMonitor.IsHome)
             {
                 try
                 {
@@ -951,18 +1010,37 @@ namespace TEAMS2HA
             Dispatcher.Invoke(() =>
             {
                 bool mqttConnected = _mqttService != null && _mqttService.IsConnected;
+                bool pausedAway = !mqttConnected && _homeMonitor != null && _homeMonitor.IsEnabled && !_homeMonitor.IsHome;
 
-                MQTTConnectionStatus.Text = mqttConnected ? "MQTT: Connected" : "MQTT: Disconnected";
+                MQTTConnectionStatus.Text = mqttConnected
+                    ? "MQTT: Connected"
+                    : (pausedAway ? "MQTT: Paused (not home)" : "MQTT: Disconnected");
 
                 MqttStatusIcon.Foreground = mqttConnected
                     ? new SolidColorBrush(Colors.LightGreen)
-                    : new SolidColorBrush(Colors.Gray);
+                    : (pausedAway ? new SolidColorBrush(Colors.Orange) : new SolidColorBrush(Colors.Gray));
                 MqttStatusIcon.ToolTip = MQTTConnectionStatus.Text;
 
                 _mqttStatusMenuItem.Header = MQTTConnectionStatus.Text;
             });
         }
 
+
+        private void UseCurrentNetwork_Click(object sender, RoutedEventArgs e)
+        {
+            var mac = HomeNetworkMonitor.GetCurrentGatewayMac();
+            if (mac != null)
+            {
+                HomeGatewayMacBox.Text = mac;
+                Log.Information("Current gateway MAC captured as home network: {mac}", mac);
+            }
+            else
+            {
+                MessageBox.Show(
+                    "Could not determine the current gateway's MAC address. Are you connected to a network?",
+                    "Home network detection", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
 
         private void Websockets_Checked(object sender, RoutedEventArgs e)
         {

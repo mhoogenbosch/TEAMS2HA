@@ -84,13 +84,20 @@ namespace TEAMS2HA.API
             Log.Information("MQTT client created.");
         }
 
+        // Availability topic (with Last Will) so HA marks every entity 'unavailable' the moment
+        // the app disconnects, crashes or the laptop sleeps — instead of keeping stale retained
+        // states (e.g. is_in_meeting stuck 'on') forever.
+        private string AvailabilityTopic => $"teams2ha/{(_settings?.SensorPrefix ?? _deviceId ?? Environment.MachineName).ToLower()}/availability";
+
+        public event Action ConnectionEstablished;
+
         private void SetupEventHandlers()
         {
             _mqttClient.ConnectedAsync += async e =>
             {
                 Log.Information("Connected to MQTT broker.");
                 StatusUpdated?.Invoke("Connected");
-                await Task.CompletedTask;
+                await OnConnectedAsync();
             };
 
             _mqttClient.DisconnectedAsync += async e =>
@@ -107,8 +114,60 @@ namespace TEAMS2HA.API
             _mqttClient.ApplicationMessageReceivedAsync += OnMessageReceivedAsync;
         }
 
+        // Runs on every (re)connect: the broker forgot our subscriptions (clean session), and
+        // any state change that happened while disconnected was never delivered — so resubscribe,
+        // clear the dedup cache and let the app republish its current state.
+        private async Task OnConnectedAsync()
+        {
+            try
+            {
+                await PublishAvailabilityAsync(true);
+
+                var topics = new List<string>(_subscribedTopics);
+                _subscribedTopics.Clear();
+                foreach (var topic in topics)
+                {
+                    await SubscribeAsync(topic, MqttQualityOfServiceLevel.AtLeastOnce);
+                }
+
+                _previousSensorStates.Clear();
+                await PublishTeamsStatusSensorAsync();
+                ConnectionEstablished?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Error during post-connect setup: {message}", ex.Message);
+            }
+        }
+
+        public async Task PublishAvailabilityAsync(bool online)
+        {
+            var message = new MqttApplicationMessageBuilder()
+                .WithTopic(AvailabilityTopic)
+                .WithPayload(online ? "online" : "offline")
+                .WithQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce)
+                .WithRetainFlag(true)
+                .Build();
+            await PublishAsync(message);
+        }
+
+        /// <summary>
+        /// Marks all entities unavailable in HA and disconnects. Used when leaving the home
+        /// network and on app exit. If the network is already gone the publish fails silently,
+        /// but the broker's Last Will delivers the same 'offline' after the keepalive timeout.
+        /// </summary>
+        public async Task GoOfflineAsync()
+        {
+            if (IsConnected)
+            {
+                await PublishAvailabilityAsync(false);
+            }
+            await DisconnectAsync();
+        }
+
         private void StartReconnectTimer()
         {
+            StopReconnectTimer();
             _reconnectTimer = new Timer(async _ => await EnsureConnectedAsync(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30));
         }
 
@@ -218,6 +277,15 @@ namespace TEAMS2HA.API
             await _connectionSemaphore.WaitAsync();
             try
             {
+                // A previous DisconnectAsync cancels the token source; without a fresh one every
+                // later connect/publish would be cancelled instantly and the service would be
+                // dead until an app restart.
+                if (_cancellationTokenSource.IsCancellationRequested)
+                {
+                    _cancellationTokenSource.Dispose();
+                    _cancellationTokenSource = new CancellationTokenSource();
+                }
+
                 if (IsConnected)
                 {
                     await _mqttClient.DisconnectAsync();
@@ -229,7 +297,11 @@ namespace TEAMS2HA.API
                     .WithClientId(uniqueClientId)
                     .WithKeepAlivePeriod(TimeSpan.FromSeconds(60))
                     .WithCleanSession(true)
-                    .WithCredentials(settings.MqttUsername, settings.MqttPassword);
+                    .WithCredentials(settings.MqttUsername, settings.MqttPassword)
+                    .WithWillTopic(AvailabilityTopic)
+                    .WithWillPayload("offline")
+                    .WithWillRetain(true)
+                    .WithWillQualityOfServiceLevel(MqttQualityOfServiceLevel.AtLeastOnce);
 
                 if (settings.UseWebsockets && !settings.UseTLS)
                 {
@@ -270,8 +342,8 @@ namespace TEAMS2HA.API
                 await _mqttClient.ConnectAsync(_mqttClientOptions, _cancellationTokenSource.Token);
 
                 Log.Information($"MQTT client connected with new settings.");
-                await PublishTeamsStatusSensorAsync();
-                Log.Information("Subscribed to incoming messages.");
+                // Availability, status sensor and resubscriptions are handled in OnConnectedAsync
+                // (ConnectedAsync event), which also covers automatic reconnects.
 
                 // Start the reconnect timer
                 StartReconnectTimer();
@@ -364,6 +436,9 @@ namespace TEAMS2HA.API
                 device = _deviceInfo,
                 icon = "mdi:account-circle",
                 state_topic = $"homeassistant/sensor/{_deviceId}/{sensorName}/state",
+                availability_topic = AvailabilityTopic,
+                payload_available = "online",
+                payload_not_available = "offline",
             };
 
             var configMessage = new MqttApplicationMessageBuilder()
@@ -431,7 +506,10 @@ namespace TEAMS2HA.API
                 if (forcePublish || !_previousSensorStates.TryGetValue(sensorKey, out var previousState) || previousState != stateValue)
                 {
                     Log.Information($"Force Publishing configuration for {sensorName} with state {stateValue}.");
-                    _previousSensorStates[sensorKey] = stateValue;
+                    // The previous-state cache is only updated after a successful publish (below);
+                    // updating it up front made a failed publish look delivered, so the off-
+                    // transition of e.g. IsInMeeting was lost forever and the sensor stuck 'on'.
+                    bool stateDelivered = false;
 
                     if (forcePublish)
                     {
@@ -450,7 +528,10 @@ namespace TEAMS2HA.API
                             command_topic = $"homeassistant/switch/{_deviceId.ToLower()}/{sensorName}/set",
                             state_topic = $"homeassistant/switch/{_deviceId.ToLower()}/{sensorName}/state",
                             payload_on = "ON",
-                            payload_off = "OFF"
+                            payload_off = "OFF",
+                            availability_topic = AvailabilityTopic,
+                            payload_available = "online",
+                            payload_not_available = "offline"
                         };
 
                         var switchConfigMessage = new MqttApplicationMessageBuilder()
@@ -469,7 +550,7 @@ namespace TEAMS2HA.API
                             .WithRetainFlag(true)
                             .Build();
 
-                        await PublishAsync(stateMessage);
+                        stateDelivered = await PublishAsync(stateMessage);
                     }
                     else if (deviceClass == "binary_sensor")
                     {
@@ -482,7 +563,10 @@ namespace TEAMS2HA.API
                             icon = icon,
                             state_topic = $"homeassistant/binary_sensor/{_deviceId.ToLower()}/{sensorName}/state",
                             payload_on = "true",
-                            payload_off = "false"
+                            payload_off = "false",
+                            availability_topic = AvailabilityTopic,
+                            payload_available = "online",
+                            payload_not_available = "offline"
                         };
 
                         var binarySensorConfigMessage = new MqttApplicationMessageBuilder()
@@ -501,7 +585,16 @@ namespace TEAMS2HA.API
                             .WithRetainFlag(true)
                             .Build();
 
-                        await PublishAsync(binarySensorStateMessage);
+                        stateDelivered = await PublishAsync(binarySensorStateMessage);
+                    }
+
+                    if (stateDelivered)
+                    {
+                        _previousSensorStates[sensorKey] = stateValue;
+                    }
+                    else
+                    {
+                        Log.Warning($"State for {sensorName} ({stateValue}) not delivered; will retry on next publish.");
                     }
                 }
             }
@@ -601,16 +694,18 @@ namespace TEAMS2HA.API
             }
         }
 
-        public async Task PublishAsync(MqttApplicationMessage message)
+        public async Task<bool> PublishAsync(MqttApplicationMessage message)
         {
             try
             {
                 await _mqttClient.PublishAsync(message, _cancellationTokenSource.Token);
                 Log.Information("Publish successful." + message.Topic);
+                return true;
             }
             catch (Exception ex)
             {
-                Log.Information($"Error during MQTT publish: {ex.Message}");
+                Log.Error($"Error during MQTT publish to {message.Topic}: {ex.Message}");
+                return false;
             }
         }
     }

@@ -174,6 +174,32 @@
                         </StackPanel>
                     </materialDesign:Card>
 
+                    <!-- Home Detection Card -->
+                    <materialDesign:Card Padding="16" Margin="0,0,0,12"
+                                          materialDesign:ElevationAssist.Elevation="Dp2">
+                        <StackPanel>
+                            <TextBlock Text="Home Detection"
+                                       Style="{StaticResource MaterialDesignHeadline6TextBlock}"
+                                       Margin="0,0,0,6"/>
+                            <TextBlock TextWrapping="Wrap" Opacity="0.7" Margin="0,0,0,10"
+                                       Text="Only connect to MQTT (and publish state) while on your home network, detected by the MAC address of the default gateway. Leave empty to always connect. Away from home all entities become 'unavailable' in Home Assistant."/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="HomeGatewayMacBox" Grid.Column="0" Margin="0,0,12,0"
+                                         Style="{StaticResource MaterialDesignOutlinedTextBox}"
+                                         materialDesign:HintAssist.Hint="Home gateway MAC (e.g. AA:BB:CC:DD:EE:FF)"
+                                         materialDesign:TextFieldAssist.UnderlineBrush="{DynamicResource ActiveFieldBrush}"
+                                         materialDesign:HintAssist.Foreground="{DynamicResource ActiveFieldBrush}"/>
+                                <Button Grid.Column="1" Content="Use Current Network"
+                                        Click="UseCurrentNetwork_Click" VerticalAlignment="Center"
+                                        Style="{StaticResource MaterialDesignOutlinedButton}"/>
+                            </Grid>
+                        </StackPanel>
+                    </materialDesign:Card>
+
                     <!-- Action Buttons -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,8">
                         <Button Content="View Logs" Click="LogsButton_Click" Margin="0,0,8,0"
