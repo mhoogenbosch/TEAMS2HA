@@ -1,4 +1,5 @@
 mod app_state;
+mod home_network;
 mod log_watcher;
 mod migration;
 mod mqtt_service;
@@ -41,6 +42,13 @@ async fn get_mqtt_status(mqtt: State<'_, MqttHandle>) -> Result<String, String> 
 }
 
 #[tauri::command]
+async fn get_current_gateway_mac() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(home_network::current_gateway_mac)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn save_settings(
     settings: Settings,
     mqtt: State<'_, MqttHandle>,
@@ -49,6 +57,14 @@ async fn save_settings(
     app: AppHandle,
 ) -> Result<(), String> {
     settings.save().map_err(|e| e.to_string())?;
+
+    // Home gating: while away, keep MQTT paused. The poller reconnects on arrival.
+    if !home_network::is_home(&settings.home_gateway_mac) {
+        log::info!("Settings saved; not on the home network - MQTT stays paused.");
+        *mqtt.write().await = None;
+        app.emit("mqtt-status", "Paused (not home)").ok();
+        return Ok(());
+    }
 
     let tx: mpsc::Sender<MqttCommand> = (**cmd_tx).clone();
     let rtx: mpsc::Sender<()> = (**reconnect_tx).clone();
@@ -139,28 +155,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move { registry_monitor::start(reg_tx).await });
             tauri::async_runtime::spawn(async move { process_watcher::start(proc_tx).await });
 
-            // Initial MQTT connection (non-blocking — status emitted via ConnAck in eventloop)
+            // Home-network monitor. Its first emission (home/away) drives the initial MQTT
+            // connection via the central event loop; later transitions connect/pause MQTT.
             let settings = Settings::load();
             let run_minimized = settings.run_minimized;
-            let mqtt_h2 = mqtt_handle.clone();
-            let tx2: mpsc::Sender<MqttCommand> = (*cmd_tx).clone();
-            let rtx2: mpsc::Sender<()> = (*reconnect_tx).clone();
-            let handle2 = handle.clone();
-            tauri::async_runtime::spawn(async move {
-                if !settings.mqtt_address.is_empty() {
-                    match MqttService::connect(&settings, tx2, rtx2, handle2.clone()).await {
-                        Ok(svc) => {
-                            *mqtt_h2.write().await = Some(svc);
-                        }
-                        Err(e) => {
-                            log::warn!("Initial MQTT connect failed: {e}");
-                            handle2.emit("mqtt-status", "Disconnected").ok();
-                        }
-                    }
-                } else {
-                    handle2.emit("mqtt-status", "Disconnected").ok();
-                }
-            });
+            let (home_tx, mut home_rx) = mpsc::channel::<bool>(4);
+            home_network::start(home_tx);
 
             // Window visibility
             if run_minimized {
@@ -175,6 +175,8 @@ pub fn run() {
             let shared2 = shared.clone();
             let mqtt_h3 = mqtt_handle.clone();
             let handle3 = handle.clone();
+            let cmd_tx3 = cmd_tx.clone();
+            let reconnect_tx3 = reconnect_tx.clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::select! {
@@ -198,13 +200,16 @@ pub fn run() {
                             // get real values immediately rather than waiting for a change.
                             publish(&mqtt_h3, &handle3, &shared2).await;
                         }
+                        Some(is_home) = home_rx.recv() => {
+                            handle_home_change(is_home, &mqtt_h3, &handle3, &cmd_tx3, &reconnect_tx3).await;
+                        }
                     }
                 }
             });
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_settings, save_settings, get_state, get_mqtt_status])
+        .invoke_handler(tauri::generate_handler![get_settings, save_settings, get_state, get_mqtt_status, get_current_gateway_mac])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -217,6 +222,43 @@ fn toggle_window(app: &AppHandle) {
             w.show().ok();
             w.set_focus().ok();
         }
+    }
+}
+
+async fn handle_home_change(
+    is_home: bool,
+    mqtt: &MqttHandle,
+    app: &AppHandle,
+    cmd_tx: &CmdTx,
+    reconnect_tx: &ReconnectTx,
+) {
+    if is_home {
+        if mqtt.read().await.is_some() {
+            return;
+        }
+        let settings = Settings::load();
+        if settings.mqtt_address.is_empty() {
+            app.emit("mqtt-status", "Disconnected").ok();
+            return;
+        }
+        log::info!("Home network detected - connecting to MQTT");
+        let tx: mpsc::Sender<MqttCommand> = (**cmd_tx).clone();
+        let rtx: mpsc::Sender<()> = (**reconnect_tx).clone();
+        match MqttService::connect(&settings, tx, rtx, app.clone()).await {
+            Ok(svc) => {
+                *mqtt.write().await = Some(svc);
+            }
+            Err(e) => {
+                log::warn!("MQTT connect on arriving home failed: {e}");
+                app.emit("mqtt-status", "Disconnected").ok();
+            }
+        }
+    } else {
+        log::info!("Left the home network - pausing MQTT");
+        // Dropping the service closes the TCP connection without a DISCONNECT packet, so the
+        // broker publishes the Last Will ('offline') and HA marks all entities unavailable.
+        *mqtt.write().await = None;
+        app.emit("mqtt-status", "Paused (not home)").ok();
     }
 }
 

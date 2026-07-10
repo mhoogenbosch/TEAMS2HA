@@ -19,6 +19,10 @@ pub struct Settings {
     pub run_minimized: bool,
     pub theme: String,
     pub color_scheme: String,
+    /// MAC address(es) of the home router/gateway, comma-separated. When set, the app only
+    /// connects to MQTT while the default gateway's MAC matches (i.e. at home). Empty = always.
+    #[serde(default)]
+    pub home_gateway_mac: String,
 }
 
 impl Default for Settings {
@@ -36,6 +40,7 @@ impl Default for Settings {
             run_minimized: false,
             theme: "dark".into(),
             color_scheme: "DeepPurple / Lime".into(),
+            home_gateway_mac: String::new(),
         }
     }
 }
