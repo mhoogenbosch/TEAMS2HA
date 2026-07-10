@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS = {
   runMinimized: false,
   theme: "dark",
   colorScheme: "DeepPurple / Lime",
+  homeGatewayMac: "",
 };
 
 export default function Settings() {
@@ -36,6 +37,21 @@ export default function Settings() {
   }, [settings.theme]);
 
   const set = (key, value) => setSettings((s) => ({ ...s, [key]: value }));
+
+  const useCurrentNetwork = async () => {
+    try {
+      const mac = await invoke("get_current_gateway_mac");
+      if (mac) {
+        set("homeGatewayMac", mac);
+      } else {
+        setSaveStatus("error: could not detect the current gateway MAC");
+        setTimeout(() => setSaveStatus(null), 4000);
+      }
+    } catch (err) {
+      setSaveStatus("error: " + err);
+      setTimeout(() => setSaveStatus(null), 4000);
+    }
+  };
 
   const handleSave = async (e) => {
     e.preventDefault();
@@ -157,6 +173,30 @@ export default function Settings() {
             <span className="toggle-track" />
             🌙
           </label>
+        </div>
+      </section>
+
+      {/* Home Detection */}
+      <section className="card">
+        <h2 className="card-title">Home Detection</h2>
+        <p className="card-hint">
+          Only connect to MQTT while on your home network, matched by the default
+          gateway&apos;s MAC address. Leave empty to always connect. Away from home,
+          all entities show as unavailable in Home Assistant.
+        </p>
+        <div className="field-row">
+          <div className="field flex-grow">
+            <label>Home gateway MAC</label>
+            <input
+              type="text"
+              value={settings.homeGatewayMac}
+              onChange={(e) => set("homeGatewayMac", e.target.value)}
+              placeholder="e.g. AA:BB:CC:DD:EE:FF"
+            />
+          </div>
+          <button type="button" className="btn-secondary" onClick={useCurrentNetwork}>
+            Use Current Network
+          </button>
         </div>
       </section>
 
