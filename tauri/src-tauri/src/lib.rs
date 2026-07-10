@@ -20,12 +20,13 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use wasapi_monitor::WasapiEvent;
 
 type MqttHandle = Arc<RwLock<Option<MqttService>>>;
 type CmdTx = Arc<mpsc::Sender<MqttCommand>>;
 type ReconnectTx = Arc<mpsc::Sender<()>>;
+type HomeMacTx = Arc<watch::Sender<String>>;
 
 #[tauri::command]
 async fn get_settings() -> Result<Settings, String> {
@@ -54,12 +55,21 @@ async fn save_settings(
     mqtt: State<'_, MqttHandle>,
     cmd_tx: State<'_, CmdTx>,
     reconnect_tx: State<'_, ReconnectTx>,
+    home_mac_tx: State<'_, HomeMacTx>,
     app: AppHandle,
 ) -> Result<(), String> {
     settings.save().map_err(|e| e.to_string())?;
 
+    // Hand the (possibly changed) home MAC to the poller so it re-evaluates immediately.
+    let _ = home_mac_tx.send(settings.home_gateway_mac.clone());
+
     // Home gating: while away, keep MQTT paused. The poller reconnects on arrival.
-    if !home_network::is_home(&settings.home_gateway_mac) {
+    // SendARP can block up to ~1s, so run it off the async executor.
+    let mac = settings.home_gateway_mac.clone();
+    let is_home = tokio::task::spawn_blocking(move || home_network::is_home(&mac))
+        .await
+        .unwrap_or(true);
+    if !is_home {
         log::info!("Settings saved; not on the home network - MQTT stays paused.");
         *mqtt.write().await = None;
         app.emit("mqtt-status", "Paused (not home)").ok();
@@ -159,10 +169,14 @@ pub fn run() {
 
             // Home-network monitor. Its first emission (home/away) drives the initial MQTT
             // connection via the central event loop; later transitions connect/pause MQTT.
+            // The configured MAC flows in via a watch channel (updated on settings save).
             let settings = Settings::load();
             let run_minimized = settings.run_minimized;
             let (home_tx, mut home_rx) = mpsc::channel::<bool>(4);
-            home_network::start(home_tx);
+            let (home_mac_tx, home_mac_rx) = watch::channel(settings.home_gateway_mac.clone());
+            let home_mac_tx: HomeMacTx = Arc::new(home_mac_tx);
+            app.manage(home_mac_tx);
+            home_network::start(home_tx, home_mac_rx);
 
             // Window visibility
             if run_minimized {
