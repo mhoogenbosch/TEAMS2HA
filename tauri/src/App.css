@@ -144,3 +144,8 @@ body {
 .save-status { font-size: 13px; }
 .save-status.ok { color: var(--connected); }
 .save-status.err { color: var(--disconnected); }
+
+/* Home detection */
+.card-hint { font-size: 13px; opacity: .7; margin: 0 0 12px; line-height: 1.5; }
+.btn-secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); border-radius: var(--radius); padding: 9px 16px; font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity .15s; align-self: flex-end; margin-bottom: 2px; white-space: nowrap; }
+.btn-secondary:hover { opacity: .8; }
