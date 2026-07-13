@@ -22,6 +22,10 @@ This fork adds two things to the Tauri app (and equivalent fixes to the legacy W
 
 <b>Availability (Last Will)</b> — all entities now carry an MQTT availability topic (<code>teams2ha/&lt;prefix&gt;/availability</code>) with a retained Last Will. When the app exits, the laptop sleeps or you leave the home network, Home Assistant marks every Teams2HA entity <i>unavailable</i> instead of keeping the last retained state forever (no more <code>is_in_meeting</code> stuck 'on' after closing the laptop mid-call).
 
+<b>Suspend/resume resilience (v1.3.2)</b> — after Modern Standby (S0ix) Windows delivers no reliable resume event to a suspended tray app, and the pre-sleep MQTT session can be a silently dead TCP connection. The app now detects a resume by clock gap and rebuilds the MQTT connection from scratch (fresh ConnAck &rarr; availability, discovery and current state re-published). The gateway-MAC lookup also got a timeout so one hung ARP call can no longer freeze home detection.
+
+<b>No more phantom calls from a stale Consent Store (v1.3.2)</b> — Windows' privacy registry keeps <code>LastUsedTimeStop = 0</code> ("camera/mic in use") when Teams dies or the machine suspends mid-call. An 'active' reading now only counts after the device has been seen inactive at least once since app start or system resume, so a leftover marker can no longer publish a phantom in-meeting/video-on state. The app also logs to <code>teams2ha.log</code> next to <code>settings.json</code> (default level info, <code>RUST_LOG</code> overrides).
+
 <h2>MQTT</h2>
 
 Provide your MQTT instance details (IP, username and password) The password is encrypted before being saved to the settings file and is not stored in clear text.

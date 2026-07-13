@@ -106,6 +106,13 @@ pub fn is_first_run() -> bool {
     settings_path().map(|p| !p.exists()).unwrap_or(false)
 }
 
+/// Directory that holds settings.json — also used for the log file.
+pub fn data_dir() -> Option<PathBuf> {
+    settings_path()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+}
+
 fn settings_path() -> Result<PathBuf> {
     let dirs = ProjectDirs::from("com", "jimmyeao", "Teams2HA")
         .ok_or_else(|| anyhow::anyhow!("Cannot determine app data directory"))?;
