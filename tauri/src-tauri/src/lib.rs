@@ -9,6 +9,7 @@ mod settings;
 mod wasapi_monitor;
 
 use app_state::{new_shared, SharedState};
+use home_network::HomeEvent;
 use log_watcher::LogEvent;
 use mqtt_service::{MeetingState, MqttCommand, MqttService};
 use process_watcher::ProcessEvent;
@@ -98,9 +99,33 @@ async fn get_state(shared: State<'_, SharedState>) -> Result<MeetingState, Strin
     Ok(shared.read().await.meeting.clone())
 }
 
+/// Log to a file next to settings.json (a tray app has no visible stderr), default
+/// level `info` — env_logger's default of errors-only left us blind on 13-07-2026
+/// when the MQTT connection silently never came back after a Modern Standby resume.
+/// RUST_LOG still overrides the level.
+fn init_logging() {
+    use env_logger::{Builder, Env, Target};
+    let mut builder = Builder::from_env(Env::default().default_filter_or("info"));
+    if let Some(dir) = settings::data_dir() {
+        let path = dir.join("teams2ha.log");
+        let _ = std::fs::create_dir_all(&dir);
+        // Simple size cap: start over once the file exceeds 5 MB.
+        if std::fs::metadata(&path)
+            .map(|m| m.len() > 5 * 1024 * 1024)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(&path);
+        }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            builder.target(Target::Pipe(Box::new(file)));
+        }
+    }
+    builder.init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    init_logging();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -172,7 +197,7 @@ pub fn run() {
             // The configured MAC flows in via a watch channel (updated on settings save).
             let settings = Settings::load();
             let run_minimized = settings.run_minimized;
-            let (home_tx, mut home_rx) = mpsc::channel::<bool>(4);
+            let (home_tx, mut home_rx) = mpsc::channel::<HomeEvent>(4);
             let (home_mac_tx, home_mac_rx) = watch::channel(settings.home_gateway_mac.clone());
             let home_mac_tx: HomeMacTx = Arc::new(home_mac_tx);
             app.manage(home_mac_tx);
@@ -216,8 +241,8 @@ pub fn run() {
                             // get real values immediately rather than waiting for a change.
                             publish(&mqtt_h3, &handle3, &shared2).await;
                         }
-                        Some(is_home) = home_rx.recv() => {
-                            handle_home_change(is_home, &mqtt_h3, &handle3, &cmd_tx3, &reconnect_tx3).await;
+                        Some(ev) = home_rx.recv() => {
+                            handle_home_event(ev, &mqtt_h3, &handle3, &cmd_tx3, &reconnect_tx3).await;
                         }
                     }
                 }
@@ -237,6 +262,33 @@ fn toggle_window(app: &AppHandle) {
         } else {
             w.show().ok();
             w.set_focus().ok();
+        }
+    }
+}
+
+async fn handle_home_event(
+    ev: HomeEvent,
+    mqtt: &MqttHandle,
+    app: &AppHandle,
+    cmd_tx: &CmdTx,
+    reconnect_tx: &ReconnectTx,
+) {
+    match ev {
+        HomeEvent::Changed(is_home) => {
+            handle_home_change(is_home, mqtt, app, cmd_tx, reconnect_tx).await;
+        }
+        HomeEvent::Resumed(is_home) => {
+            // The pre-suspend session can be a silently dead TCP connection that the
+            // eventloop never errors out on. Drop it unconditionally (the broker then
+            // publishes the Last Will) and, when still home, connect from scratch —
+            // ConnAck re-publishes availability, discovery and the current state.
+            log::info!("Resume from suspend - rebuilding MQTT connection (home={is_home})");
+            *mqtt.write().await = None;
+            if is_home {
+                handle_home_change(true, mqtt, app, cmd_tx, reconnect_tx).await;
+            } else {
+                app.emit("mqtt-status", "Paused (not home)").ok();
+            }
         }
     }
 }
