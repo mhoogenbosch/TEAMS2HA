@@ -26,6 +26,14 @@ This fork adds two things to the Tauri app (and equivalent fixes to the legacy W
 
 <b>No more phantom calls from a stale Consent Store (v1.3.2)</b> — Windows' privacy registry keeps <code>LastUsedTimeStop = 0</code> ("camera/mic in use") when Teams dies or the machine suspends mid-call. An 'active' reading now only counts after the device has been seen inactive at least once since app start or system resume, so a leftover marker can no longer publish a phantom in-meeting/video-on state. The app also logs to <code>teams2ha.log</code> next to <code>settings.json</code> (default level info, <code>RUST_LOG</code> overrides).
 
+<h3>Code signing policy</h3>
+
+Free code signing for this fork's releases is provided by <a href="https://about.signpath.io/">SignPath.io</a>, with a certificate by the <a href="https://signpath.org/">SignPath Foundation</a>.
+
+Releases are built from this repository by GitHub Actions (see <code>.github/workflows/release.yml</code>) and signed through SignPath after manual approval of each release. Team roles: committer, reviewer and approver is Martijn Hoogenbosch (<a href="https://github.com/mhoogenbosch">@mhoogenbosch</a>).
+
+Privacy: this program does not transfer any user data to any third party. It communicates exclusively with the MQTT broker you configure yourself.
+
 <h2>MQTT</h2>
 
 Provide your MQTT instance details (IP, username and password) The password is encrypted before being saved to the settings file and is not stored in clear text.
