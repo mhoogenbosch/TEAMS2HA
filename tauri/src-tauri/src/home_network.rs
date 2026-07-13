@@ -1,5 +1,6 @@
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
+use tokio::time::Instant;
 
 /// Home-network detection based on the MAC address of the default IPv4 gateway.
 ///
@@ -27,45 +28,97 @@ pub fn current_gateway_mac() -> Option<String> {
     current_gateway_mac_bytes().map(format_mac)
 }
 
+const POLL_INTERVAL: Duration = Duration::from_secs(20);
+
+/// A poll iteration that arrives this much later than the poll interval means the process
+/// was frozen in between: the machine slept (Modern Standby or S3). Windows delivers no
+/// reliable resume event to a suspended desktop app, so the clock gap is the signal.
+const RESUME_GAP: Duration = Duration::from_secs(90);
+
+/// How long a single gateway-MAC lookup may take. SendARP normally answers well within a
+/// second, but right after a resume (Wi-Fi still re-associating) it can block far longer —
+/// without a timeout one hung lookup freezes the poller forever.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy)]
+pub enum HomeEvent {
+    /// Regular home/away transition from polling.
+    Changed(bool),
+    /// The system just woke from suspend; payload = current raw home state. The MQTT
+    /// session from before the suspend may be a silently dead TCP connection, so the
+    /// service must be rebuilt even when the home state looks unchanged.
+    Resumed(bool),
+}
+
 /// Spawns the poller. Sends the initial state immediately, then emits on every
 /// home/away transition. Flipping to away requires two consecutive misses so a
-/// transient ARP failure doesn't drop the connection.
+/// transient ARP failure doesn't drop the connection. After a detected suspend the
+/// poller emits `Resumed` with the *raw* current state (strikes reset) so the MQTT
+/// connection is rebuilt from scratch.
 ///
 /// The configured MAC arrives via a watch channel (updated on settings save), so the
 /// poller never touches the settings file and reacts to a config change immediately.
-pub fn start(tx: mpsc::Sender<bool>, mut mac_rx: watch::Receiver<String>) {
+pub fn start(tx: mpsc::Sender<HomeEvent>, mut mac_rx: watch::Receiver<String>) {
     tauri::async_runtime::spawn(async move {
         let mut last: Option<bool> = None;
         let mut away_strikes: u8 = 0;
+        let mut previous_iteration = Instant::now();
         loop {
-            let configured = mac_rx.borrow_and_update().clone();
-            // SendARP can block for up to a second — keep it off the async runtime.
-            let home = tokio::task::spawn_blocking(move || is_home(&configured))
-                .await
-                .unwrap_or(true);
+            let gap = previous_iteration.elapsed();
+            let resumed = gap > POLL_INTERVAL + RESUME_GAP;
+            previous_iteration = Instant::now();
 
-            let effective = if home {
-                away_strikes = 0;
-                true
-            } else {
-                away_strikes = away_strikes.saturating_add(1);
-                // Until confirmed away, keep reporting the previous state (initially away).
-                if away_strikes >= 2 { false } else { last.unwrap_or(false) }
+            let configured = mac_rx.borrow_and_update().clone();
+            // SendARP can block — keep it off the async runtime and cap how long we wait.
+            let home = match tokio::time::timeout(
+                LOOKUP_TIMEOUT,
+                tokio::task::spawn_blocking(move || is_home(&configured)),
+            )
+            .await
+            {
+                Ok(join) => join.unwrap_or(true),
+                Err(_) => {
+                    log::warn!("Gateway MAC lookup timed out; treating as not home");
+                    false
+                }
             };
 
-            if last != Some(effective) {
-                last = Some(effective);
+            if resumed {
+                // Report the raw state: strikes exist to smooth steady-state flapping,
+                // after a resume we want the immediate truth.
+                away_strikes = 0;
+                last = Some(home);
                 log::info!(
-                    "Home network state: {}",
-                    if effective { "home" } else { "away" }
+                    "System resume detected (poll gap {}s) - forcing MQTT rebuild (home={home})",
+                    gap.as_secs()
                 );
-                if tx.send(effective).await.is_err() {
+                if tx.send(HomeEvent::Resumed(home)).await.is_err() {
                     break;
+                }
+            } else {
+                let effective = if home {
+                    away_strikes = 0;
+                    true
+                } else {
+                    away_strikes = away_strikes.saturating_add(1);
+                    // Until confirmed away, keep reporting the previous state (initially away).
+                    if away_strikes >= 2 { false } else { last.unwrap_or(false) }
+                };
+
+                if last != Some(effective) {
+                    last = Some(effective);
+                    log::info!(
+                        "Home network state: {}",
+                        if effective { "home" } else { "away" }
+                    );
+                    if tx.send(HomeEvent::Changed(effective)).await.is_err() {
+                        break;
+                    }
                 }
             }
 
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(20)) => {}
+                _ = tokio::time::sleep(POLL_INTERVAL) => {}
                 changed = mac_rx.changed() => {
                     if changed.is_err() {
                         break; // Sender dropped — app shutting down.

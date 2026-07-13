@@ -6,7 +6,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, watch};
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingState {
     pub is_muted: bool,
@@ -15,6 +15,22 @@ pub struct MeetingState {
     pub has_unread_messages: bool,
     pub teams_running: bool,
     pub presence: String,
+}
+
+impl Default for MeetingState {
+    fn default() -> Self {
+        Self {
+            is_muted: false,
+            is_video_on: false,
+            is_in_meeting: false,
+            has_unread_messages: false,
+            teams_running: false,
+            // "Unknown" instead of empty: the first post-connect state publish then
+            // overwrites a stale retained presence on the broker (e.g. 'Busy' from
+            // before a crash) instead of skipping the topic and leaving it stand.
+            presence: "Unknown".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
