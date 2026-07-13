@@ -12,12 +12,6 @@ jobs:
   release:
     runs-on: windows-latest
 
-    # Code signing via SignPath switches on automatically once the repo is configured:
-    # secret SIGNPATH_API_TOKEN + variables SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG /
-    # SIGNPATH_POLICY_SLUG. Without them the release is published unsigned, as before.
-    env:
-      SIGNPATH_ENABLED: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
-
     name: Build (${{ matrix.label }})
     strategy:
       fail-fast: false
@@ -95,52 +89,3 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
-
-      # --- SignPath code signing (skipped until the repo is configured, see job env) ---
-
-      - name: Locate built installer
-        if: env.SIGNPATH_ENABLED == 'true'
-        id: installer
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem "tauri/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/Teams2HA_*-setup.exe" |
-            Select-Object -First 1
-          if (-not $exe) { Write-Error "Installer not found for signing"; exit 1 }
-          "path=$($exe.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
-          "name=$($exe.Name)" | Out-File $env:GITHUB_OUTPUT -Append
-
-      - name: Upload unsigned installer as workflow artifact
-        if: env.SIGNPATH_ENABLED == 'true'
-        id: unsigned
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-installer-${{ matrix.label }}
-          path: ${{ steps.installer.outputs.path }}
-          if-no-files-found: error
-
-      - name: Submit SignPath signing request
-        if: env.SIGNPATH_ENABLED == 'true'
-        id: signing
-        uses: signpath/github-action-submit-signing-request@v2
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
-          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
-          wait-for-completion: true
-          # Release signing policies typically require manual approval in SignPath;
-          # give the approver half an hour before the job gives up.
-          wait-for-completion-timeout-in-seconds: 1800
-          output-artifact-directory: signed
-
-      - name: Replace release asset with signed installer
-        if: env.SIGNPATH_ENABLED == 'true'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $signed = Get-ChildItem "signed" -Recurse -Filter "${{ steps.installer.outputs.name }}" |
-            Select-Object -First 1
-          if (-not $signed) { Write-Error "Signed installer not found in SignPath output"; exit 1 }
-          gh release upload "${{ github.ref_name }}" "$($signed.FullName)" --clobber
