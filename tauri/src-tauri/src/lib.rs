@@ -240,7 +240,9 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
             s.log_watcher_in_call = active;
             if active {
                 s.meeting.is_in_meeting = true;
-            } else if s.meeting.presence != "Busy" && s.meeting.presence != "DoNotDisturb" {
+            } else {
+                // Presence must NOT gate call-end (see handle_registry_event):
+                // Teams holds presence at "Busy" during/after calls.
                 s.meeting.is_in_meeting = false;
                 s.meeting.is_muted = false;
             }
@@ -280,10 +282,12 @@ async fn handle_registry_event(
             if active && !s.meeting.is_in_meeting {
                 s.meeting.is_in_meeting = true;
             } else if !active && !s.log_watcher_in_call {
-                let presence = s.meeting.presence.clone();
-                if presence != "Busy" && presence != "DoNotDisturb" {
-                    s.meeting.is_in_meeting = false;
-                }
+                // Mic released and the log watcher isn't holding a call open →
+                // the call has ended. Presence must NOT gate this: Teams keeps
+                // presence at "Busy"/"DoNotDisturb" during and after a call, so
+                // guarding on it left is_in_meeting stuck on forever.
+                s.meeting.is_in_meeting = false;
+                s.meeting.is_muted = false;
             }
         }
     }
