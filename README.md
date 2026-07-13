@@ -26,6 +26,8 @@ This fork adds two things to the Tauri app (and equivalent fixes to the legacy W
 
 <b>No more phantom calls from a stale Consent Store (v1.3.2)</b> — Windows' privacy registry keeps <code>LastUsedTimeStop = 0</code> ("camera/mic in use") when Teams dies or the machine suspends mid-call. An 'active' reading now only counts after the device has been seen inactive at least once since app start or system resume, so a leftover marker can no longer publish a phantom in-meeting/video-on state. The app also logs to <code>teams2ha.log</code> next to <code>settings.json</code> (default level info, <code>RUST_LOG</code> overrides).
 
+<b>Close hides to tray (v1.3.3)</b> — the window's close button now hides the window (like the tray "Show / Hide") instead of quitting the app and taking the MQTT bridge down with it. Quit via the tray menu.
+
 <h2>MQTT</h2>
 
 Provide your MQTT instance details (IP, username and password) The password is encrypted before being saved to the settings file and is not stored in clear text.
