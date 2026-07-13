@@ -250,6 +250,14 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // Tray-app behaviour: the close button hides the window instead of quitting
+            // (quitting would kill the MQTT bridge). Quit lives in the tray menu.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                window.hide().ok();
+            }
+        })
         .invoke_handler(tauri::generate_handler![get_settings, save_settings, get_state, get_mqtt_status, get_current_gateway_mac])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
