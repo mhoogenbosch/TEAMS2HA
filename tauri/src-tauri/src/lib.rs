@@ -373,7 +373,11 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
             s.log_watcher_in_call = active;
             if active {
                 s.meeting.is_in_meeting = true;
-            } else if s.meeting.presence != "Busy" && s.meeting.presence != "DoNotDisturb" {
+            } else {
+                // The Teams log's "call ended" is authoritative — clear the meeting flag
+                // regardless of presence. Teams routinely leaves presence on "Busy" after a
+                // meeting, which previously kept is_in_meeting stuck on indefinitely even
+                // though the log clearly reported the call had ended.
                 s.meeting.is_in_meeting = false;
                 s.meeting.is_muted = false;
             }
@@ -413,10 +417,10 @@ async fn handle_registry_event(
             if active && !s.meeting.is_in_meeting {
                 s.meeting.is_in_meeting = true;
             } else if !active && !s.log_watcher_in_call {
-                let presence = s.meeting.presence.clone();
-                if presence != "Busy" && presence != "DoNotDisturb" {
-                    s.meeting.is_in_meeting = false;
-                }
+                // Mic released and the log agrees no call is active → meeting over.
+                // Not gated on presence: Busy/DND lingers after meetings and must not
+                // keep the meeting flag stuck on.
+                s.meeting.is_in_meeting = false;
             }
         }
     }

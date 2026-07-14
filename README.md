@@ -28,6 +28,8 @@ This fork adds two things to the Tauri app (and equivalent fixes to the legacy W
 
 <b>Panics are logged (v1.3.5)</b> — as a windowless tray app, a Rust panic's stderr output was lost, so a crash left no trace. A panic hook now records the location and message to <code>teams2ha.log</code> before the process exits.
 
+<b>Meeting flag follows the call, not your presence (v1.3.6)</b> — previously <code>is_in_meeting</code> was only cleared when your Teams presence was not "Busy"/"Do not disturb". Teams routinely leaves presence on "Busy" after a meeting, so the flag stayed stuck on indefinitely even though the Teams log reported the call had ended. The log's "call ended" (and the mic being released) is now authoritative: the meeting flag clears when the call actually ends, independent of the lingering presence status.
+
 <b>Close hides to tray (v1.3.3)</b> — the window's close button now hides the window (like the tray "Show / Hide") instead of quitting the app and taking the MQTT bridge down with it. Quit via the tray menu.
 
 <h2>MQTT</h2>
