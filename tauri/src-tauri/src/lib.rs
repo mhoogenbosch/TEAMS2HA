@@ -121,6 +121,25 @@ fn init_logging() {
         }
     }
     builder.init();
+
+    // Route panics to the log file too. This is a windowless app (windows_subsystem =
+    // "windows"), so a panic's default stderr output is lost — a crash would leave no trace.
+    // Chain to the default hook so behaviour is otherwise unchanged.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown".into());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".into());
+        log::error!("PANIC at {location}: {msg}");
+        default_hook(info);
+    }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
