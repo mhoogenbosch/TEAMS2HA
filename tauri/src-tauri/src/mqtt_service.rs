@@ -1,12 +1,12 @@
 use crate::settings::Settings;
 use anyhow::Result;
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
+use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
 use serde_json::json;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, watch};
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeetingState {
     pub is_muted: bool,
@@ -15,6 +15,22 @@ pub struct MeetingState {
     pub has_unread_messages: bool,
     pub teams_running: bool,
     pub presence: String,
+}
+
+impl Default for MeetingState {
+    fn default() -> Self {
+        Self {
+            is_muted: false,
+            is_video_on: false,
+            is_in_meeting: false,
+            has_unread_messages: false,
+            teams_running: false,
+            // "Unknown" instead of empty: the first post-connect state publish then
+            // overwrites a stale retained presence on the broker (e.g. 'Busy' from
+            // before a crash) instead of skipping the topic and leaving it stand.
+            presence: "Unknown".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +64,17 @@ impl MqttService {
         opts.set_keep_alive(Duration::from_secs(30));
         opts.set_clean_session(true);
 
+        // Last Will: whenever the connection dies without a clean DISCONNECT (crash, sleep,
+        // leaving the network, or the app dropping the service on purpose), the broker marks
+        // all entities unavailable in HA — instead of leaving stale retained states behind
+        // (e.g. is_in_meeting stuck 'on' after closing the laptop mid-call).
+        opts.set_last_will(LastWill::new(
+            availability_topic(&prefix),
+            "offline",
+            QoS::AtLeastOnce,
+            true,
+        ));
+
         if !settings.mqtt_username.is_empty() {
             opts.set_credentials(&settings.mqtt_username, &settings.mqtt_password);
         }
@@ -76,6 +103,7 @@ impl MqttService {
                         Ok(Event::Incoming(Packet::ConnAck(_))) => {
                             log::info!("MQTT: connected to broker");
                             app.emit("mqtt-status", "Connected").ok();
+                            publish_availability(&client_clone, &prefix_clone, true).await;
                             subscribe(&client_clone, &prefix_clone).await;
                             publish_discovery_inner(&client_clone, &prefix_clone).await;
                             let _ = reconnect_tx.send(()).await;
@@ -157,6 +185,24 @@ impl MqttService {
     }
 }
 
+fn availability_topic(prefix: &str) -> String {
+    format!("teams2ha/{prefix}/availability")
+}
+
+async fn publish_availability(client: &AsyncClient, prefix: &str, online: bool) {
+    if let Err(e) = client
+        .publish(
+            availability_topic(prefix),
+            QoS::AtLeastOnce,
+            true,
+            if online { "online" } else { "offline" },
+        )
+        .await
+    {
+        log::warn!("MQTT availability publish failed: {e}");
+    }
+}
+
 async fn subscribe(client: &AsyncClient, prefix: &str) {
     if let Err(e) = client
         .subscribe(
@@ -192,6 +238,9 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
             "command_topic": format!("homeassistant/switch/{prefix}/{id}/set"),
             "payload_on": "ON",
             "payload_off": "OFF",
+            "availability_topic": availability_topic(prefix),
+            "payload_available": "online",
+            "payload_not_available": "offline",
             "device": device
         });
         if let Err(e) = client
@@ -214,6 +263,9 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
             "state_topic": format!("homeassistant/binary_sensor/{prefix}/{id}/state"),
             "payload_on": "ON",
             "payload_off": "OFF",
+            "availability_topic": availability_topic(prefix),
+            "payload_available": "online",
+            "payload_not_available": "offline",
             "device": device
         });
         if let Err(e) = client
@@ -234,6 +286,9 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         "unique_id": format!("{prefix}_teamsstatus"),
         "state_topic": format!("homeassistant/sensor/{prefix}/teamsstatus/state"),
         "icon": "mdi:account-circle",
+        "availability_topic": availability_topic(prefix),
+        "payload_available": "online",
+        "payload_not_available": "offline",
         "device": device
     });
     if let Err(e) = client
