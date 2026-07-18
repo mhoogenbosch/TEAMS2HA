@@ -166,7 +166,7 @@ fn current_gateway_mac_bytes() -> Option<[u8; 6]> {
         let mut row: MIB_IPFORWARDROW = std::mem::zeroed();
         // Any public IP works — we only need the route's next hop (the LAN gateway).
         let dest = u32::from_ne_bytes([8, 8, 8, 8]);
-        if GetBestRoute(dest, None, &mut row) != 0 {
+        if GetBestRoute(dest, 0, &mut row) != 0 {
             return None;
         }
         let gateway = row.dwForwardNextHop;
