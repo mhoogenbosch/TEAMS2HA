@@ -16,6 +16,11 @@ export default function SensorStrip({ meetingState }) {
       state: meetingState.isVideoOn ? "active" : "idle",
     },
     {
+      label: "Mic (system)",
+      value: meetingState.micSystemMuted ? "Muted" : "On",
+      state: meetingState.micSystemMuted ? "alert" : "ok",
+    },
+    {
       label: "Teams",
       value: meetingState.teamsRunning ? "Running" : "Not running",
       state: meetingState.teamsRunning ? "ok" : "idle",

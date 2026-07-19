@@ -1,19 +1,23 @@
 mod app_state;
 mod home_network;
 mod log_watcher;
+mod mic_control;
 mod migration;
 mod mqtt_service;
 mod process_watcher;
 mod registry_monitor;
+mod session_monitor;
 mod settings;
 mod wasapi_monitor;
 
 use app_state::{new_shared, SharedState};
 use home_network::HomeEvent;
 use log_watcher::LogEvent;
+use mic_control::MicEvent;
 use mqtt_service::{MeetingState, MqttCommand, MqttService};
 use process_watcher::ProcessEvent;
 use registry_monitor::RegistryEvent;
+use session_monitor::SessionEvent;
 use settings::Settings;
 use std::sync::Arc;
 use tauri::{
@@ -150,6 +154,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // First-run migration: silently remove old ClickOnce install entry.
             if settings::is_first_run() {
@@ -163,7 +168,7 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("Teams2HA")
@@ -204,10 +209,14 @@ pub fn run() {
             let (wasapi_tx, mut wasapi_rx) = mpsc::channel::<WasapiEvent>(64);
             let (reg_tx, mut reg_rx) = mpsc::channel::<RegistryEvent>(64);
             let (proc_tx, mut proc_rx) = mpsc::channel::<ProcessEvent>(64);
+            let (mic_tx, mut mic_rx) = mpsc::channel::<MicEvent>(16);
+            let (session_tx, mut session_rx) = mpsc::channel::<SessionEvent>(16);
 
             // Start OS monitors
             log_watcher::start(log_tx);
             wasapi_monitor::start(wasapi_tx);
+            mic_control::start(mic_tx);
+            session_monitor::start(session_tx);
             tauri::async_runtime::spawn(async move { registry_monitor::start(reg_tx).await });
             tauri::async_runtime::spawn(async move { process_watcher::start(proc_tx).await });
 
@@ -252,8 +261,18 @@ pub fn run() {
                         Some(ev) = proc_rx.recv() => {
                             handle_process_event(ev, &shared2, &mqtt_h3, &handle3).await;
                         }
-                        Some(_cmd) = cmd_rx.recv() => {
-                            log::info!("MQTT command received (no Teams API to forward to)");
+                        Some(ev) = mic_rx.recv() => {
+                            let MicEvent::SystemMuteChanged(muted) = ev;
+                            shared2.write().await.meeting.mic_system_muted = muted;
+                            publish(&mqtt_h3, &handle3, &shared2, false).await;
+                        }
+                        Some(ev) = session_rx.recv() => {
+                            let SessionEvent::LockedChanged(locked) = ev;
+                            shared2.write().await.meeting.session_locked = locked;
+                            publish(&mqtt_h3, &handle3, &shared2, false).await;
+                        }
+                        Some(cmd) = cmd_rx.recv() => {
+                            handle_mqtt_command(cmd, &shared2, &mqtt_h3, &handle3).await;
                         }
                         Some(()) = reconnect_rx.recv() => {
                             // ConnAck received — push current state so HA sensors
@@ -381,7 +400,144 @@ async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force
         // must be retried on the next event or the ConnAck re-publish.
         shared.write().await.last_published = Some(state.clone());
     }
+    update_tray(app, &state);
     app.emit("state-update", &state).ok();
+}
+
+async fn handle_mqtt_command(
+    cmd: MqttCommand,
+    shared: &SharedState,
+    mqtt: &MqttHandle,
+    app: &AppHandle,
+) {
+    match cmd {
+        // The Teams local API was retired by Microsoft; these switches are
+        // effectively read-only and the commands go nowhere.
+        MqttCommand::ToggleMute | MqttCommand::ToggleVideo => {
+            log::info!("MQTT command received (no Teams API to forward to)");
+        }
+        MqttCommand::SetSystemMicMute(muted) => {
+            let result =
+                tokio::task::spawn_blocking(move || mic_control::set_system_mic_mute(muted)).await;
+            match result {
+                Ok(Ok(())) => {
+                    // Optimistic update so the HA switch flips instantly; the
+                    // mic poller confirms (or corrects) within a poll cycle.
+                    shared.write().await.meeting.mic_system_muted = muted;
+                    publish(mqtt, app, shared, false).await;
+                }
+                Ok(Err(e)) => log::warn!("Set system mic mute failed: {e}"),
+                Err(e) => log::warn!("Set system mic mute join error: {e}"),
+            }
+        }
+        MqttCommand::Notify(payload) => show_toast(app, &payload),
+    }
+}
+
+/// Show an HA-initiated message as a Windows toast. Payload is either plain
+/// text or JSON with optional `title` and `message` fields.
+fn show_toast(app: &AppHandle, payload: &str) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let (title, body) = serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .map(|v| {
+            (
+                v.get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Home Assistant")
+                    .to_string(),
+                v.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or(payload)
+                    .to_string(),
+            )
+        })
+        .unwrap_or_else(|| ("Home Assistant".to_string(), payload.to_string()));
+
+    if let Err(e) = app.notification().builder().title(&title).body(&body).show() {
+        log::warn!("Toast notification failed: {e}");
+    }
+}
+
+/// 0 = idle, 1 = in meeting, 2 = muted. Muted wins over in-meeting: during a
+/// call the mute state is the actionable bit of information.
+fn tray_variant(state: &MeetingState) -> u8 {
+    if state.mic_system_muted || (state.is_in_meeting && state.is_muted) {
+        2
+    } else if state.is_in_meeting {
+        1
+    } else {
+        0
+    }
+}
+
+/// Recolour the tray icon with a status dot (red = in meeting, orange = muted).
+/// Cheap no-op when the variant hasn't changed.
+fn update_tray(app: &AppHandle, state: &MeetingState) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST_VARIANT: AtomicU8 = AtomicU8::new(u8::MAX);
+
+    let variant = tray_variant(state);
+    if LAST_VARIANT.swap(variant, Ordering::Relaxed) == variant {
+        return;
+    }
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    let Some(base) = app.default_window_icon() else {
+        return;
+    };
+
+    let dot = match variant {
+        1 => Some([255u8, 82, 82]),   // red: in meeting
+        2 => Some([255u8, 171, 64]),  // orange: muted
+        _ => None,
+    };
+    let _ = tray.set_icon(Some(icon_with_dot(base, dot)));
+
+    let tooltip = match variant {
+        1 => "Teams2HA — in meeting",
+        2 if state.is_in_meeting => "Teams2HA — in meeting (muted)",
+        2 => "Teams2HA — mic muted",
+        _ => "Teams2HA",
+    };
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
+/// Copy of the app icon with a filled status dot in the bottom-right corner
+/// (or the unmodified icon when `dot` is None). Pure pixel work — no assets.
+fn icon_with_dot(
+    base: &tauri::image::Image<'_>,
+    dot: Option<[u8; 3]>,
+) -> tauri::image::Image<'static> {
+    let w = base.width() as i32;
+    let h = base.height() as i32;
+    let mut pixels = base.rgba().to_vec();
+
+    if let Some(rgb) = dot {
+        let radius = ((w.min(h) as f32) * 0.28).max(3.0) as i32;
+        let cx = w - radius - 1;
+        let cy = h - radius - 1;
+        for y in (cy - radius)..=(cy + radius) {
+            for x in (cx - radius)..=(cx + radius) {
+                if x < 0 || y < 0 || x >= w || y >= h {
+                    continue;
+                }
+                let dx = x - cx;
+                let dy = y - cy;
+                if dx * dx + dy * dy <= radius * radius {
+                    let i = ((y * w + x) * 4) as usize;
+                    pixels[i] = rgb[0];
+                    pixels[i + 1] = rgb[1];
+                    pixels[i + 2] = rgb[2];
+                    pixels[i + 3] = 255;
+                }
+            }
+        }
+    }
+
+    tauri::image::Image::new_owned(pixels, w as u32, h as u32)
 }
 
 async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle, app: &AppHandle) {

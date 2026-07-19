@@ -14,6 +14,10 @@ pub struct MeetingState {
     pub is_in_meeting: bool,
     pub teams_running: bool,
     pub presence: String,
+    /// Master mute of the default communications microphone (system-wide,
+    /// genuinely settable from HA — unlike the Teams session mute above).
+    pub mic_system_muted: bool,
+    pub session_locked: bool,
 }
 
 impl Default for MeetingState {
@@ -27,6 +31,8 @@ impl Default for MeetingState {
             // overwrites a stale retained presence on the broker (e.g. 'Busy' from
             // before a crash) instead of skipping the topic and leaving it stand.
             presence: "Unknown".into(),
+            mic_system_muted: false,
+            session_locked: false,
         }
     }
 }
@@ -35,6 +41,10 @@ impl Default for MeetingState {
 pub enum MqttCommand {
     ToggleMute,
     ToggleVideo,
+    SetSystemMicMute(bool),
+    /// Show a Windows toast; payload is the raw notify message (plain text or
+    /// JSON with title/message).
+    Notify(String),
 }
 
 pub struct MqttService {
@@ -154,8 +164,10 @@ impl MqttService {
         let bool_pairs: &[(&str, &str, bool)] = &[
             ("switch", "ismuted", state.is_muted),
             ("switch", "isvideoon", state.is_video_on),
+            ("switch", "micsystemmuted", state.mic_system_muted),
             ("binary_sensor", "isinmeeting", state.is_in_meeting),
             ("binary_sensor", "teamsrunning", state.teams_running),
+            ("binary_sensor", "sessionlocked", state.session_locked),
         ];
         for (component, id, value) in bool_pairs {
             if let Err(e) = self
@@ -199,6 +211,10 @@ fn availability_topic(prefix: &str) -> String {
     format!("teams2ha/{prefix}/availability")
 }
 
+fn notify_topic(prefix: &str) -> String {
+    format!("teams2ha/{prefix}/notify")
+}
+
 async fn publish_availability(client: &AsyncClient, prefix: &str, online: bool) {
     if let Err(e) = client
         .publish(
@@ -214,14 +230,13 @@ async fn publish_availability(client: &AsyncClient, prefix: &str, online: bool) 
 }
 
 async fn subscribe(client: &AsyncClient, prefix: &str) {
-    if let Err(e) = client
-        .subscribe(
-            format!("homeassistant/switch/{prefix}/+/set"),
-            QoS::AtLeastOnce,
-        )
-        .await
-    {
-        log::warn!("MQTT subscribe error: {e}");
+    for topic in [
+        format!("homeassistant/switch/{prefix}/+/set"),
+        notify_topic(prefix),
+    ] {
+        if let Err(e) = client.subscribe(topic, QoS::AtLeastOnce).await {
+            log::warn!("MQTT subscribe error: {e}");
+        }
     }
 }
 
@@ -236,10 +251,15 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         "sw_version": env!("CARGO_PKG_VERSION")
     });
 
-    let switches = [("ismuted", "Is Muted"), ("isvideoon", "Is Video On")];
+    let switches = [
+        ("ismuted", "Is Muted"),
+        ("isvideoon", "Is Video On"),
+        ("micsystemmuted", "Mic Muted (System)"),
+    ];
     let binary_sensors = [
         ("isinmeeting", "Is In Meeting"),
         ("teamsrunning", "Teams Running"),
+        ("sessionlocked", "Session Locked"),
     ];
 
     // One-time cleanup for the retired 'hasunreadmessages' entity: its detection
@@ -304,6 +324,31 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         }
     }
 
+    // Notify entity: HA's notify.send_message publishes the message text to the
+    // command topic; the app shows it as a Windows toast. Lets automations reach
+    // this machine ("doorbell", "laundry done") even during headphone meetings.
+    let notify_payload = json!({
+        "name": "Toast",
+        "unique_id": format!("{prefix}_toast"),
+        "command_topic": notify_topic(prefix),
+        "icon": "mdi:message-badge",
+        "availability_topic": availability_topic(prefix),
+        "payload_available": "online",
+        "payload_not_available": "offline",
+        "device": device
+    });
+    if let Err(e) = client
+        .publish(
+            format!("homeassistant/notify/{prefix}/toast/config"),
+            QoS::AtLeastOnce,
+            true,
+            serde_json::to_vec(&notify_payload).unwrap_or_default(),
+        )
+        .await
+    {
+        log::warn!("Discovery publish failed for toast: {e}");
+    }
+
     let teamsstatus_payload = json!({
         "name": "Teams Status",
         "unique_id": format!("{prefix}_teamsstatus"),
@@ -338,6 +383,15 @@ async fn handle_incoming(
     let payload_str = std::str::from_utf8(payload).unwrap_or("").trim();
     log::debug!("MQTT incoming: {topic} = {payload_str}");
 
+    if topic == notify_topic(prefix) {
+        if !payload_str.is_empty() {
+            let _ = cmd_tx
+                .send(MqttCommand::Notify(payload_str.to_string()))
+                .await;
+        }
+        return;
+    }
+
     let switch_prefix = format!("homeassistant/switch/{prefix}/");
     if let Some(rest) = topic.strip_prefix(&switch_prefix) {
         if let Some(id) = rest.strip_suffix("/set") {
@@ -347,6 +401,11 @@ async fn handle_incoming(
                 }
                 "isvideoon" => {
                     let _ = cmd_tx.send(MqttCommand::ToggleVideo).await;
+                }
+                "micsystemmuted" => {
+                    let _ = cmd_tx
+                        .send(MqttCommand::SetSystemMicMute(payload_str == "ON"))
+                        .await;
                 }
                 _ => {}
             }
