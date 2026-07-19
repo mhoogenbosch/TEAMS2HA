@@ -40,28 +40,35 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
         loop {
             std::thread::sleep(Duration::from_millis(250));
 
-            // None = no usable reading (COM error or no Teams capture session);
-            // keep the last known state instead of inventing a mute flank.
-            let Some(muted) = check_teams_mute(&enumerator) else {
-                continue;
-            };
-            if Some(muted) != last_muted {
-                last_muted = Some(muted);
-                log::info!("WasapiMonitor: mute → {muted}");
-                let _ = tx.blocking_send(WasapiEvent::MuteChanged(muted));
+            match check_teams_mute(&enumerator) {
+                // COM hiccup: no usable reading — keep the last known state
+                // instead of inventing a mute flank mid-call.
+                Err(()) => {}
+                // No Teams capture session (e.g. between calls): clear the cache
+                // so the first reading of the next call always produces an event,
+                // even when its mute state equals how the previous call ended
+                // (is_muted gets reset on meeting end elsewhere).
+                Ok(None) => last_muted = None,
+                Ok(Some(muted)) => {
+                    if Some(muted) != last_muted {
+                        last_muted = Some(muted);
+                        log::info!("WasapiMonitor: mute → {muted}");
+                        let _ = tx.blocking_send(WasapiEvent::MuteChanged(muted));
+                    }
+                }
             }
         }
     }
 }
 
-/// Some(muted) when a Teams capture session was found; None when there is nothing
-/// to measure (no Teams session) or the audio API failed. Previously both cases
-/// were reported as "muted", so a transient COM hiccup mid-call produced a false
-/// mute flank.
+/// Ok(Some(muted)) when a Teams capture session was measured, Ok(None) when no
+/// Teams session exists, Err(()) when the audio API failed. Previously all of
+/// these were reported as "muted", so a transient COM hiccup mid-call produced
+/// a false mute flank.
 #[cfg(windows)]
 unsafe fn check_teams_mute(
     enumerator: &windows::Win32::Media::Audio::IMMDeviceEnumerator,
-) -> Option<bool> {
+) -> Result<Option<bool>, ()> {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
         eCapture, IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
@@ -69,8 +76,10 @@ unsafe fn check_teams_mute(
     };
     use windows::Win32::System::Com::CLSCTX_ALL;
 
-    let collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE).ok()?;
-    let count = collection.GetCount().ok()?;
+    let collection = enumerator
+        .EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)
+        .map_err(|_| ())?;
+    let count = collection.GetCount().map_err(|_| ())?;
 
     let mut teams_found = false;
     let mut teams_hw_muted = false;
@@ -132,9 +141,9 @@ unsafe fn check_teams_mute(
     }
 
     if teams_found {
-        Some(teams_hw_muted)
+        Ok(Some(teams_hw_muted))
     } else {
-        None
+        Ok(None)
     }
 }
 
