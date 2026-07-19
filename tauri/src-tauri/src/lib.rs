@@ -397,7 +397,6 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
             }
         }
         LogEvent::PresenceChanged(p) => s.meeting.presence = p,
-        LogEvent::UnreadMessages(u) => s.meeting.has_unread_messages = u,
     }
     drop(s);
     publish(mqtt, app, shared, false).await;

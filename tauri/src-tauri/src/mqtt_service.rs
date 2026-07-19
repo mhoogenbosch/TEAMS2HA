@@ -12,7 +12,6 @@ pub struct MeetingState {
     pub is_muted: bool,
     pub is_video_on: bool,
     pub is_in_meeting: bool,
-    pub has_unread_messages: bool,
     pub teams_running: bool,
     pub presence: String,
 }
@@ -23,7 +22,6 @@ impl Default for MeetingState {
             is_muted: false,
             is_video_on: false,
             is_in_meeting: false,
-            has_unread_messages: false,
             teams_running: false,
             // "Unknown" instead of empty: the first post-connect state publish then
             // overwrites a stale retained presence on the broker (e.g. 'Busy' from
@@ -157,7 +155,6 @@ impl MqttService {
             ("switch", "ismuted", state.is_muted),
             ("switch", "isvideoon", state.is_video_on),
             ("binary_sensor", "isinmeeting", state.is_in_meeting),
-            ("binary_sensor", "hasunreadmessages", state.has_unread_messages),
             ("binary_sensor", "teamsrunning", state.teams_running),
         ];
         for (component, id, value) in bool_pairs {
@@ -242,9 +239,19 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
     let switches = [("ismuted", "Is Muted"), ("isvideoon", "Is Video On")];
     let binary_sensors = [
         ("isinmeeting", "Is In Meeting"),
-        ("hasunreadmessages", "Has Unread Messages"),
         ("teamsrunning", "Teams Running"),
     ];
+
+    // One-time cleanup for the retired 'hasunreadmessages' entity: its detection
+    // heuristic matched almost any Teams log line, making the sensor meaningless.
+    // Empty retained payloads remove the old discovery config and state from the
+    // broker (and thereby the entity from Home Assistant).
+    for topic in [
+        format!("homeassistant/binary_sensor/{prefix}/hasunreadmessages/config"),
+        format!("homeassistant/binary_sensor/{prefix}/hasunreadmessages/state"),
+    ] {
+        let _ = client.publish(topic, QoS::AtLeastOnce, true, "").await;
+    }
 
     for (id, name) in &switches {
         let payload = json!({
