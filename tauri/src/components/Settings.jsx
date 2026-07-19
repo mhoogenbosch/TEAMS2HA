@@ -24,16 +24,23 @@ export default function Settings() {
 
   useEffect(() => {
     invoke("get_settings")
-      .then((s) => {
-        setSettings(s);
-        document.documentElement.setAttribute("data-theme", s.theme ?? "dark");
-      })
+      .then(setSettings)
       .catch((e) => console.error("load settings:", e));
   }, []);
 
-  // Apply theme immediately on toggle (before save)
+  // Apply theme immediately on change (before save). "system" resolves to the
+  // Windows app theme via prefers-color-scheme (WebView2 tracks it live).
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", settings.theme);
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const resolved =
+        settings.theme === "system" ? (query.matches ? "dark" : "light") : settings.theme;
+      document.documentElement.setAttribute("data-theme", resolved);
+    };
+    apply();
+    if (settings.theme !== "system") return;
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
   }, [settings.theme]);
 
   const set = (key, value) => setSettings((s) => ({ ...s, [key]: value }));
@@ -161,18 +168,24 @@ export default function Settings() {
           />
         </div>
 
-        <div className="theme-row">
-          <label className="toggle-label">
-            ☀
-            <input
-              type="checkbox"
-              className="toggle"
-              checked={settings.theme === "dark"}
-              onChange={(e) => set("theme", e.target.checked ? "dark" : "light")}
-            />
-            <span className="toggle-track" />
-            🌙
-          </label>
+        <div className="field">
+          <label>Theme</label>
+          <div className="chip-row">
+            {[
+              ["system", "🖥 System"],
+              ["light", "☀ Light"],
+              ["dark", "🌙 Dark"],
+            ].map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                className={`chip ${settings.theme === value ? "chip-active" : ""}`}
+                onClick={() => set("theme", value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </section>
 

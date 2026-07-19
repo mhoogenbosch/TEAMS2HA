@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.3.11] — 2026-07-19
+### Added
+- **"System" theme option.** The light/dark toggle is now a three-way choice (System / Light / Dark). "System" follows the Windows app theme live — switching Windows between light and dark mode restyles the app immediately.
+
 ## [v1.3.10] — 2026-07-19
 ### Added
 - **Sensor strip** below the status bar showing the individual signals the app publishes: microphone (on/muted), camera (on/off) and whether Teams is running — with the same colour coding as the status bar.
@@ -78,6 +82,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.3.11]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.11
 [v1.3.10]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.10
 [v1.3.9]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.9
 [v1.3.8]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.8
