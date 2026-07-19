@@ -5,6 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 
 ## [v1.3.10] — 2026-07-19
 ### Added
+- **Sensor strip** below the status bar showing the individual signals the app publishes: microphone (on/muted), camera (on/off) and whether Teams is running — with the same colour coding as the status bar.
 - **Release Notes button** in the Updates card. Opens the GitHub release page for the offered update (or, when up to date, the installed version) in the default browser, where the notes render properly — instead of the raw markdown the old `window.confirm()` prompt used to show.
 ### Fixed
 - A scrollbar could still appear around the window itself (e.g. when the Updates card grows or wraps); window-level scrolling is now disabled entirely — the content area remains the only (invisible) scroller, and the updater row wraps cleanly now that it holds two buttons.
