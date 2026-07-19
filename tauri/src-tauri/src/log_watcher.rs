@@ -10,7 +10,6 @@ pub enum LogEvent {
     MuteChanged(bool),
     MeetingChanged(bool),
     PresenceChanged(String),
-    UnreadMessages(bool),
 }
 
 pub fn start(tx: mpsc::Sender<LogEvent>) {
@@ -92,9 +91,6 @@ async fn process_line(line: &str, tx: &mpsc::Sender<LogEvent>, in_call: &mut boo
             log::debug!("LogWatcher: presence → {status}");
             let _ = tx.send(LogEvent::PresenceChanged(status)).await;
         }
-    } else if line.contains("unread") || line.contains("UnreadCount") {
-        let has_unread = line.contains("true") || line.contains("1");
-        let _ = tx.send(LogEvent::UnreadMessages(has_unread)).await;
     }
 }
 
