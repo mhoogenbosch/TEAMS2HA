@@ -20,7 +20,14 @@ pub fn remove_old_clickonce() {
         for name in uninstall_key.enum_keys().flatten() {
             if let Ok(sub) = uninstall_key.open_subkey(&name) {
                 let display: String = sub.get_value("DisplayName").unwrap_or_default();
-                if display.to_lowercase().contains("teams2ha") {
+                let uninstall: String = sub.get_value("UninstallString").unwrap_or_default();
+                // Only match the ClickOnce entry, recognised by its dfshim.dll uninstall
+                // command. Matching on the display name alone also caught the NSIS
+                // uninstall entry this very installer just wrote (same product name),
+                // deleting the app's own Add/Remove Programs entry on first run.
+                if display.to_lowercase().contains("teams2ha")
+                    && uninstall.to_lowercase().contains("dfshim")
+                {
                     target = Some(name);
                     break;
                 }

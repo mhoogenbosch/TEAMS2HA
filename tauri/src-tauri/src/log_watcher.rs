@@ -123,14 +123,30 @@ fn scan_last_presence(reader: &mut BufReader<File>) -> Option<String> {
     last
 }
 
+/// Return the presence keyword closest to the end of the line. Transition lines
+/// ("from Busy to Available") name two statuses and the new one comes last —
+/// first-match-in-list returned the OLD status for those. Matches are word-bounded
+/// so e.g. "Available" never matches inside "Unavailable".
 fn extract_presence(line: &str) -> Option<String> {
-    // e.g. "UserPresenceAction Busy" or "presence: Available"
-    for status in &["Busy", "Available", "Away", "DoNotDisturb", "BeRightBack", "Offline"] {
-        if line.contains(status) {
-            return Some(status.to_string());
+    const STATUSES: [&str; 6] = [
+        "Busy", "Available", "Away", "DoNotDisturb", "BeRightBack", "Offline",
+    ];
+    let bytes = line.as_bytes();
+    let mut best: Option<(usize, &str)> = None;
+    for status in STATUSES {
+        let mut from = 0;
+        while let Some(rel) = line[from..].find(status) {
+            let idx = from + rel;
+            let end = idx + status.len();
+            let bounded = (idx == 0 || !bytes[idx - 1].is_ascii_alphabetic())
+                && (end >= bytes.len() || !bytes[end].is_ascii_alphabetic());
+            if bounded && best.is_none_or(|(b, _)| idx >= b) {
+                best = Some((idx, status));
+            }
+            from = end;
         }
     }
-    None
+    best.map(|(_, s)| s.to_string())
 }
 
 fn find_latest_log() -> Option<PathBuf> {

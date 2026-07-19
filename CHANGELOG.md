@@ -3,6 +3,15 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.4.0] — 2026-07-19
+### Breaking
+- **`ismuted` and `isvideoon` are now binary sensors instead of switches.** Their command path died when Microsoft retired the Teams local API — in HA the toggles silently bounced back without doing anything. The old retained switch discovery configs and states are cleaned up automatically on the first connect, which removes the old `switch.…` entities from Home Assistant. **Action required:** update automations/dashboards that referenced `switch.…_is_muted` / `switch.…_is_video_on` to the new `binary_sensor` entities. The system-mic switch (`micsystemmuted`) is unaffected and remains genuinely controllable.
+### Fixed
+- **First-run migration could delete the app's own uninstall entry.** The ClickOnce cleanup matched any HKCU uninstall entry whose display name contains "teams2ha" — on a machine without an old ClickOnce install, the first match was the NSIS entry this very installer had just created, removing Teams2HA from Add/Remove Programs. The cleanup now only matches genuine ClickOnce entries (dfshim.dll uninstall command).
+- **The app could freeze entirely while the broker was unreachable on the home network.** State publishes went into a bounded MQTT request queue that is not drained during the 5-second reconnect-retry sleep; once full, the awaited publish blocked the central event loop and, cascading, every monitor thread. All state/discovery publishes now use the non-blocking `try_publish`/`try_subscribe` (with a larger queue), so events keep flowing and a failed delivery is simply retried.
+- **A failed state publish was cached as delivered.** `publish_state` logged individual publish errors but always reported success, so the "only cache after a successful publish" retry mechanism never actually retried — a mute/meeting flank could be lost for good if the broker hiccuped at the wrong moment. Publish failures now propagate and the state is re-sent on the next event or reconnect.
+- **Presence transition lines could report the old status.** Log lines that name two statuses ("from Busy to Available") matched the first keyword in a fixed list instead of the most recent one. The parser now takes the status closest to the end of the line, with word-boundary matching (e.g. "Available" no longer matches inside "Unavailable").
+
 ## [v1.3.14] — 2026-07-19
 ### Fixed
 - **v1.3.13 rendered a blank window.** The auto-save code used `useRef` without importing it — a runtime `ReferenceError` that the vite build does not catch, crashing the entire UI on load (the MQTT bridge kept running). v1.3.13 installs must update to this version manually: the in-app updater lives in the UI that fails to render. ESLint (`no-undef`) now runs in CI so this class of error fails the build instead of shipping.

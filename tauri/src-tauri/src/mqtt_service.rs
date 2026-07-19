@@ -39,8 +39,6 @@ impl Default for MeetingState {
 
 #[derive(Debug, Clone)]
 pub enum MqttCommand {
-    ToggleMute,
-    ToggleVideo,
     SetSystemMicMute(bool),
     /// Show a Windows toast; payload is the raw notify message (plain text or
     /// JSON with title/message).
@@ -106,7 +104,12 @@ impl MqttService {
             opts.set_transport(Transport::Ws);
         }
 
-        let (client, mut eventloop) = AsyncClient::new(opts, 64);
+        // Roomy request queue, and everything that publishes into it uses the
+        // non-blocking try_* variants: while the broker is unreachable the
+        // eventloop sits in its retry sleep and drains nothing, so an awaited
+        // publish on a full queue would block the caller — in publish_state's
+        // case the central event loop, freezing every monitor in the app.
+        let (client, mut eventloop) = AsyncClient::new(opts, 256);
         let (stop_tx, mut stop_rx) = watch::channel(false);
 
         let client_clone = client.clone();
@@ -124,9 +127,9 @@ impl MqttService {
                         Ok(Event::Incoming(Packet::ConnAck(_))) => {
                             log::info!("MQTT: connected to broker");
                             app.emit("mqtt-status", "Connected").ok();
-                            publish_availability(&client_clone, &prefix_clone, true).await;
-                            subscribe(&client_clone, &prefix_clone).await;
-                            publish_discovery_inner(&client_clone, &prefix_clone).await;
+                            publish_availability(&client_clone, &prefix_clone, true);
+                            subscribe(&client_clone, &prefix_clone);
+                            publish_discovery_inner(&client_clone, &prefix_clone);
                             let _ = reconnect_tx.send(()).await;
                         }
                         Ok(Event::Incoming(Packet::Publish(msg))) => {
@@ -158,28 +161,32 @@ impl MqttService {
         })
     }
 
-    pub async fn publish_state(&self, state: &MeetingState) -> Result<()> {
+    /// Publish the full state. Returns Err when any topic could not be handed to
+    /// the client (e.g. request queue full while the broker is unreachable) — the
+    /// caller uses that to NOT cache the state as delivered, so the next event or
+    /// the ConnAck re-publish retries it. Non-blocking by design: an awaited
+    /// publish would stall the central event loop while the eventloop is in its
+    /// reconnect-retry sleep.
+    pub fn publish_state(&self, state: &MeetingState) -> Result<()> {
         let prefix = &self.prefix;
+        let mut all_ok = true;
 
         let bool_pairs: &[(&str, &str, bool)] = &[
-            ("switch", "ismuted", state.is_muted),
-            ("switch", "isvideoon", state.is_video_on),
             ("switch", "micsystemmuted", state.mic_system_muted),
+            ("binary_sensor", "ismuted", state.is_muted),
+            ("binary_sensor", "isvideoon", state.is_video_on),
             ("binary_sensor", "isinmeeting", state.is_in_meeting),
             ("binary_sensor", "teamsrunning", state.teams_running),
             ("binary_sensor", "sessionlocked", state.session_locked),
         ];
         for (component, id, value) in bool_pairs {
-            if let Err(e) = self
-                .client
-                .publish(
-                    format!("homeassistant/{component}/{prefix}/{id}/state"),
-                    QoS::AtLeastOnce,
-                    true,
-                    if *value { "ON" } else { "OFF" },
-                )
-                .await
-            {
+            if let Err(e) = self.client.try_publish(
+                format!("homeassistant/{component}/{prefix}/{id}/state"),
+                QoS::AtLeastOnce,
+                true,
+                if *value { "ON" } else { "OFF" },
+            ) {
+                all_ok = false;
                 log::warn!("MQTT publish failed [{id}]: {e}");
             }
         }
@@ -189,20 +196,18 @@ impl MqttService {
                 "MQTT publishing teamsstatus: '{}' → homeassistant/sensor/{prefix}/teamsstatus/state",
                 state.presence
             );
-            if let Err(e) = self
-                .client
-                .publish(
-                    format!("homeassistant/sensor/{prefix}/teamsstatus/state"),
-                    QoS::AtLeastOnce,
-                    true,
-                    state.presence.as_bytes().to_vec(),
-                )
-                .await
-            {
+            if let Err(e) = self.client.try_publish(
+                format!("homeassistant/sensor/{prefix}/teamsstatus/state"),
+                QoS::AtLeastOnce,
+                true,
+                state.presence.as_bytes().to_vec(),
+            ) {
+                all_ok = false;
                 log::warn!("MQTT publish failed [teamsstatus]: {e}");
             }
         }
 
+        anyhow::ensure!(all_ok, "one or more MQTT state publishes failed");
         Ok(())
     }
 }
@@ -215,32 +220,32 @@ fn notify_topic(prefix: &str) -> String {
     format!("teams2ha/{prefix}/notify")
 }
 
-async fn publish_availability(client: &AsyncClient, prefix: &str, online: bool) {
-    if let Err(e) = client
-        .publish(
-            availability_topic(prefix),
-            QoS::AtLeastOnce,
-            true,
-            if online { "online" } else { "offline" },
-        )
-        .await
-    {
+// The ConnAck-path helpers below use try_publish/try_subscribe: they run inside
+// the eventloop task itself, and awaiting the request queue from there while it
+// is full would deadlock the loop that is supposed to drain it.
+fn publish_availability(client: &AsyncClient, prefix: &str, online: bool) {
+    if let Err(e) = client.try_publish(
+        availability_topic(prefix),
+        QoS::AtLeastOnce,
+        true,
+        if online { "online" } else { "offline" },
+    ) {
         log::warn!("MQTT availability publish failed: {e}");
     }
 }
 
-async fn subscribe(client: &AsyncClient, prefix: &str) {
+fn subscribe(client: &AsyncClient, prefix: &str) {
     for topic in [
         format!("homeassistant/switch/{prefix}/+/set"),
         notify_topic(prefix),
     ] {
-        if let Err(e) = client.subscribe(topic, QoS::AtLeastOnce).await {
+        if let Err(e) = client.try_subscribe(topic, QoS::AtLeastOnce) {
             log::warn!("MQTT subscribe error: {e}");
         }
     }
 }
 
-async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
+fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
     let device = json!({
         "identifiers": [format!("teams2ha_{prefix}")],
         "name": format!("Teams2HA ({})", prefix),
@@ -251,26 +256,30 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         "sw_version": env!("CARGO_PKG_VERSION")
     });
 
-    let switches = [
+    let switches = [("micsystemmuted", "Mic Muted (System)")];
+    let binary_sensors = [
         ("ismuted", "Is Muted"),
         ("isvideoon", "Is Video On"),
-        ("micsystemmuted", "Mic Muted (System)"),
-    ];
-    let binary_sensors = [
         ("isinmeeting", "Is In Meeting"),
         ("teamsrunning", "Teams Running"),
         ("sessionlocked", "Session Locked"),
     ];
 
-    // One-time cleanup for the retired 'hasunreadmessages' entity: its detection
-    // heuristic matched almost any Teams log line, making the sensor meaningless.
-    // Empty retained payloads remove the old discovery config and state from the
-    // broker (and thereby the entity from Home Assistant).
+    // One-time cleanups. Empty retained payloads remove the old discovery
+    // config and state from the broker (and thereby the entity from HA):
+    // - 'hasunreadmessages': retired, its detection heuristic was meaningless.
+    // - switch 'ismuted'/'isvideoon': re-published as binary_sensor (see above)
+    //   because their command path died with the retired Teams local API — a
+    //   toggle that does nothing is worse than a sensor.
     for topic in [
         format!("homeassistant/binary_sensor/{prefix}/hasunreadmessages/config"),
         format!("homeassistant/binary_sensor/{prefix}/hasunreadmessages/state"),
+        format!("homeassistant/switch/{prefix}/ismuted/config"),
+        format!("homeassistant/switch/{prefix}/ismuted/state"),
+        format!("homeassistant/switch/{prefix}/isvideoon/config"),
+        format!("homeassistant/switch/{prefix}/isvideoon/state"),
     ] {
-        let _ = client.publish(topic, QoS::AtLeastOnce, true, "").await;
+        let _ = client.try_publish(topic, QoS::AtLeastOnce, true, "");
     }
 
     for (id, name) in &switches {
@@ -286,15 +295,12 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
             "payload_not_available": "offline",
             "device": device
         });
-        if let Err(e) = client
-            .publish(
-                format!("homeassistant/switch/{prefix}/{id}/config"),
-                QoS::AtLeastOnce,
-                true,
-                serde_json::to_vec(&payload).unwrap_or_default(),
-            )
-            .await
-        {
+        if let Err(e) = client.try_publish(
+            format!("homeassistant/switch/{prefix}/{id}/config"),
+            QoS::AtLeastOnce,
+            true,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+        ) {
             log::warn!("Discovery publish failed for {id}: {e}");
         }
     }
@@ -311,15 +317,12 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
             "payload_not_available": "offline",
             "device": device
         });
-        if let Err(e) = client
-            .publish(
-                format!("homeassistant/binary_sensor/{prefix}/{id}/config"),
-                QoS::AtLeastOnce,
-                true,
-                serde_json::to_vec(&payload).unwrap_or_default(),
-            )
-            .await
-        {
+        if let Err(e) = client.try_publish(
+            format!("homeassistant/binary_sensor/{prefix}/{id}/config"),
+            QoS::AtLeastOnce,
+            true,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+        ) {
             log::warn!("Discovery publish failed for {id}: {e}");
         }
     }
@@ -337,15 +340,12 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         "payload_not_available": "offline",
         "device": device
     });
-    if let Err(e) = client
-        .publish(
-            format!("homeassistant/notify/{prefix}/toast/config"),
-            QoS::AtLeastOnce,
-            true,
-            serde_json::to_vec(&notify_payload).unwrap_or_default(),
-        )
-        .await
-    {
+    if let Err(e) = client.try_publish(
+        format!("homeassistant/notify/{prefix}/toast/config"),
+        QoS::AtLeastOnce,
+        true,
+        serde_json::to_vec(&notify_payload).unwrap_or_default(),
+    ) {
         log::warn!("Discovery publish failed for toast: {e}");
     }
 
@@ -359,15 +359,12 @@ async fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         "payload_not_available": "offline",
         "device": device
     });
-    if let Err(e) = client
-        .publish(
-            format!("homeassistant/sensor/{prefix}/teamsstatus/config"),
-            QoS::AtLeastOnce,
-            true,
-            serde_json::to_vec(&teamsstatus_payload).unwrap_or_default(),
-        )
-        .await
-    {
+    if let Err(e) = client.try_publish(
+        format!("homeassistant/sensor/{prefix}/teamsstatus/config"),
+        QoS::AtLeastOnce,
+        true,
+        serde_json::to_vec(&teamsstatus_payload).unwrap_or_default(),
+    ) {
         log::warn!("Discovery publish failed for teamsstatus: {e}");
     }
 
@@ -392,23 +389,11 @@ async fn handle_incoming(
         return;
     }
 
-    let switch_prefix = format!("homeassistant/switch/{prefix}/");
-    if let Some(rest) = topic.strip_prefix(&switch_prefix) {
-        if let Some(id) = rest.strip_suffix("/set") {
-            match id {
-                "ismuted" => {
-                    let _ = cmd_tx.send(MqttCommand::ToggleMute).await;
-                }
-                "isvideoon" => {
-                    let _ = cmd_tx.send(MqttCommand::ToggleVideo).await;
-                }
-                "micsystemmuted" => {
-                    let _ = cmd_tx
-                        .send(MqttCommand::SetSystemMicMute(payload_str == "ON"))
-                        .await;
-                }
-                _ => {}
-            }
-        }
+    // The only remaining commandable switch. The old ismuted/isvideoon set
+    // topics are gone with their command path (retired Teams local API).
+    if topic == format!("homeassistant/switch/{prefix}/micsystemmuted/set") {
+        let _ = cmd_tx
+            .send(MqttCommand::SetSystemMicMute(payload_str == "ON"))
+            .await;
     }
 }

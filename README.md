@@ -53,16 +53,18 @@ Under **Settings → Home Detection**, click **Use Current Network** while on yo
 
 Published via MQTT discovery under your chosen name:
 
-- `switch/<YOURNAME>/ismuted`
-- `switch/<YOURNAME>/isvideoon`
-- `sensor/<YOURNAME>/teamsstatus`
-- `sensor/<YOURNAME>/presence`
+- `binary_sensor/<YOURNAME>/ismuted` — Teams-session mute (was a `switch` before v1.4.0)
+- `binary_sensor/<YOURNAME>/isvideoon` — camera in use (was a `switch` before v1.4.0)
 - `binary_sensor/<YOURNAME>/isinmeeting`
 - `binary_sensor/<YOURNAME>/teamsrunning`
+- `binary_sensor/<YOURNAME>/sessionlocked` — Windows session locked
+- `switch/<YOURNAME>/micsystemmuted` — system-wide mute of the default communications microphone (genuinely controllable from HA)
+- `sensor/<YOURNAME>/teamsstatus` — presence (Available/Busy/…)
+- a `notify` entity ("Toast") — `notify.send_message` shows a Windows toast on the machine
 
 Each carries an availability topic so HA shows them as `unavailable` when the app is away.
 
-> **Two-way control is limited.** Because Microsoft deprecated the Teams local API, the `ismuted` / `isvideoon` switches are effectively read-only — commands have nowhere to go. They reflect state rather than control Teams.
+> **Why sensors, not switches?** Microsoft retired the Teams local API, so `ismuted`/`isvideoon` commands had nowhere to go — a toggle that silently bounces back. Since v1.4.0 they are binary sensors; the system-mic switch is the one control that genuinely works. **Upgrading from ≤ v1.3.x:** the old switch entities are removed automatically (retained discovery configs are cleared) — update any HA automations that referenced `switch.…_is_muted` / `switch.…_is_video_on` to the new `binary_sensor` entities.
 
 ## Repository layout
 
