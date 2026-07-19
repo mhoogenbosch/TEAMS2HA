@@ -63,10 +63,26 @@ async fn save_settings(
     home_mac_tx: State<'_, HomeMacTx>,
     app: AppHandle,
 ) -> Result<(), String> {
+    let old = Settings::load();
     settings.save().map_err(|e| e.to_string())?;
 
     // Hand the (possibly changed) home MAC to the poller so it re-evaluates immediately.
     let _ = home_mac_tx.send(settings.home_gateway_mac.clone());
+
+    // With auto-save this fires on every change (theme, run-at-boot, …). Only
+    // touch the MQTT connection when a connection-relevant field changed —
+    // otherwise a theme switch would drop and rebuild the broker session.
+    let mqtt_dirty = old.mqtt_address != settings.mqtt_address
+        || old.mqtt_port != settings.mqtt_port
+        || old.mqtt_username != settings.mqtt_username
+        || old.mqtt_password != settings.mqtt_password
+        || old.sensor_prefix != settings.sensor_prefix
+        || old.use_tls != settings.use_tls
+        || old.ignore_cert_errors != settings.ignore_cert_errors
+        || old.use_websockets != settings.use_websockets;
+    if !mqtt_dirty {
+        return Ok(());
+    }
 
     // Home gating: while away, keep MQTT paused. The poller reconnects on arrival.
     // SendARP can block up to ~1s, so run it off the async executor.

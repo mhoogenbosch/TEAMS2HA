@@ -19,14 +19,38 @@ const DEFAULT_SETTINGS = {
 
 export default function Settings() {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
+  // JSON snapshot of the last persisted settings — the auto-save effect only
+  // fires when the current state differs from this (and never before load).
+  const lastSavedRef = useRef(null);
 
   useEffect(() => {
     invoke("get_settings")
-      .then(setSettings)
+      .then((s) => {
+        lastSavedRef.current = JSON.stringify(s);
+        setSettings(s);
+      })
       .catch((e) => console.error("load settings:", e));
   }, []);
+
+  // Auto-save: persist 1.5s after the last change (each change resets the
+  // timer via the effect cleanup). No Save button needed.
+  useEffect(() => {
+    const snapshot = JSON.stringify(settings);
+    if (lastSavedRef.current === null || snapshot === lastSavedRef.current) return;
+    setSaveStatus("saving");
+    const timer = setTimeout(async () => {
+      try {
+        await invoke("save_settings", { settings });
+        lastSavedRef.current = snapshot;
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus((s) => (s === "saved" ? null : s)), 2500);
+      } catch (err) {
+        setSaveStatus("error: " + err);
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [settings]);
 
   // Apply theme immediately on change (before save). "system" resolves to the
   // Windows app theme via prefers-color-scheme (WebView2 tracks it live).
@@ -60,23 +84,8 @@ export default function Settings() {
     }
   };
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    setSaving(true);
-    setSaveStatus(null);
-    try {
-      await invoke("save_settings", { settings });
-      setSaveStatus("saved");
-    } catch (err) {
-      setSaveStatus("error: " + err);
-    } finally {
-      setSaving(false);
-      setTimeout(() => setSaveStatus(null), 3000);
-    }
-  };
-
   return (
-    <form className="settings-form" onSubmit={handleSave}>
+    <form className="settings-form" onSubmit={(e) => e.preventDefault()}>
 
       {/* MQTT Configuration */}
       <section className="card">
@@ -213,16 +222,17 @@ export default function Settings() {
         </div>
       </section>
 
-      {/* Actions */}
+      {/* Auto-save status */}
       <div className="action-row">
         {saveStatus && (
-          <span className={`save-status ${saveStatus === "saved" ? "ok" : "err"}`}>
-            {saveStatus === "saved" ? "✓ Saved" : saveStatus}
+          <span
+            className={`save-status ${
+              saveStatus === "saved" ? "ok" : saveStatus === "saving" ? "" : "err"
+            }`}
+          >
+            {saveStatus === "saved" ? "✓ Saved" : saveStatus === "saving" ? "Saving…" : saveStatus}
           </span>
         )}
-        <button type="submit" className="btn-primary" disabled={saving}>
-          {saving ? "Saving…" : "Save Settings"}
-        </button>
       </div>
 
     </form>
