@@ -247,13 +247,15 @@ pub fn run() {
             app.manage(home_mac_tx);
             home_network::start(home_tx, home_mac_rx);
 
-            // Window visibility
-            if run_minimized {
-                if let Some(w) = handle.get_webview_window("main") {
+            // Window title carries the running version (release builds get it
+            // stamped from the git tag), plus visibility.
+            if let Some(w) = handle.get_webview_window("main") {
+                w.set_title(concat!("Teams2HA v", env!("CARGO_PKG_VERSION"))).ok();
+                if run_minimized {
                     w.hide().ok();
+                } else {
+                    w.show().ok();
                 }
-            } else if let Some(w) = handle.get_webview_window("main") {
-                w.show().ok();
             }
 
             // Central event loop — receives from all monitors + MQTT commands
