@@ -33,6 +33,10 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* The window itself must never grow a scrollbar (vertical or horizontal) —
+   .app-main is the only scroll container and hides its own scrollbar. */
+html, body { overflow: hidden; }
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -148,8 +152,9 @@ body {
 .save-status.err { color: var(--disconnected); }
 
 /* Updater */
-.updater-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.updater-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .updater-info { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.updater-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .updater-version { font-weight: 600; }
 .updater-status { font-size: 13px; color: var(--text-dim); }
 .updater-status.ok { color: var(--connected); }

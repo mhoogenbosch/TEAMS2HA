@@ -3,6 +3,9 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const RELEASES_URL = "https://github.com/mhoogenbosch/TEAMS2HA/releases";
 
 // Checks the GitHub releases feed (endpoint in tauri.conf.json -> plugins.updater)
 // on startup and then every hour. Signatures are verified against the embedded
@@ -87,6 +90,15 @@ export default function UpdaterCard() {
 
   const busy = status === "downloading" || status === "installing";
 
+  // GitHub renders the release notes properly (markdown, tables); with an
+  // update pending show the notes of the offered version, otherwise the
+  // installed one.
+  const openReleaseNotes = () => {
+    const version = update?.version ?? current;
+    const url = version ? `${RELEASES_URL}/tag/v${version}` : RELEASES_URL;
+    openUrl(url).catch((e) => console.error("Could not open release notes:", e));
+  };
+
   const statusText = {
     idle: "",
     checking: "Checking for updates…",
@@ -107,20 +119,25 @@ export default function UpdaterCard() {
           <span className="updater-version">Teams2HA {current ? `v${current}` : ""}</span>
           <span className={`updater-status ${statusClass}`}>{statusText}</span>
         </div>
-        {status === "available" || busy ? (
-          <button type="button" className="btn-primary" onClick={install} disabled={busy}>
-            {busy ? "Installing…" : `Install v${update.version} & Restart`}
+        <div className="updater-actions">
+          <button type="button" className="btn-secondary updater-check" onClick={openReleaseNotes}>
+            Release Notes
           </button>
-        ) : (
-          <button
-            type="button"
-            className="btn-secondary updater-check"
-            onClick={() => doCheck(false)}
-            disabled={status === "checking"}
-          >
-            {status === "checking" ? "Checking…" : "Check for Updates"}
-          </button>
-        )}
+          {status === "available" || busy ? (
+            <button type="button" className="btn-primary" onClick={install} disabled={busy}>
+              {busy ? "Installing…" : `Install v${update.version} & Restart`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-secondary updater-check"
+              onClick={() => doCheck(false)}
+              disabled={status === "checking"}
+            >
+              {status === "checking" ? "Checking…" : "Check for Updates"}
+            </button>
+          )}
+        </div>
       </div>
       {busy && (
         <div className="progress-track">
