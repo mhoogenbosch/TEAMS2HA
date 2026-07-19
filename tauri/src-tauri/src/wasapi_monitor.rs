@@ -36,11 +36,22 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
             };
 
         let mut last_muted: Option<bool> = None;
+        // PID→is-Teams lookups (OpenProcess + QueryFullProcessImageNameW) are the
+        // expensive part of this 4 Hz loop, and a live PID's image name never
+        // changes. Cache per PID; flush periodically to cope with PID reuse.
+        let mut pid_is_teams: std::collections::HashMap<u32, bool> =
+            std::collections::HashMap::new();
+        let mut cache_born = std::time::Instant::now();
 
         loop {
             std::thread::sleep(Duration::from_millis(250));
 
-            match check_teams_mute(&enumerator) {
+            if cache_born.elapsed() > Duration::from_secs(60) {
+                pid_is_teams.clear();
+                cache_born = std::time::Instant::now();
+            }
+
+            match check_teams_mute(&enumerator, &mut pid_is_teams) {
                 // COM hiccup: no usable reading — keep the last known state
                 // instead of inventing a mute flank mid-call.
                 Err(()) => {}
@@ -68,6 +79,7 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
 #[cfg(windows)]
 unsafe fn check_teams_mute(
     enumerator: &windows::Win32::Media::Audio::IMMDeviceEnumerator,
+    pid_is_teams: &mut std::collections::HashMap<u32, bool>,
 ) -> Result<Option<bool>, ()> {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
@@ -121,7 +133,7 @@ unsafe fn check_teams_mute(
                 Err(_) => continue,
             };
 
-            if !is_teams_pid(pid) {
+            if !*pid_is_teams.entry(pid).or_insert_with(|| is_teams_pid(pid)) {
                 continue;
             }
 

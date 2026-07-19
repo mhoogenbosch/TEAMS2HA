@@ -17,6 +17,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 - **The "Ignore Cert Errors" toggle is removed from the UI.** The backend has ignored it since v1.3.8 (when it stopped silently downgrading TLS to plain TCP), so the toggle only suggested a capability that does not exist. TLS connections always verify the certificate.
 - **A Content Security Policy is now set** for the app window (previously `null`). Defence in depth: broker-supplied strings end up in the UI, and a strict CSP limits what any future injection could do.
 - **Toast payloads from MQTT are capped at 1 KB** before being handed to the Windows notification pipeline.
+### Changed
+- **Less idle CPU.** The Teams log *directory* is rescanned every 5 s instead of 4×/s (tailing the open log file stays at 250 ms), and the audio monitor caches PID→process-name lookups (flushed every minute) instead of calling OpenProcess/QueryFullProcessImageName for every audio session four times a second.
+- **The window's MQTT status can no longer lie.** `get_mqtt_status` used to report "Connected" whenever a service object existed — also while the connection was down and retrying. Status now comes from a single store fed by the same events the UI receives (Connected / Disconnected / Paused (not home)).
+- A settings save no longer triggers a gateway-ARP lookup in the home poller unless the configured home MAC actually changed (with auto-save, every theme flip used to).
+- The gateway-MAC check during a settings save now has the same 10 s timeout the poller has; a hung SendARP (typical right after resume) no longer stalls saving.
+- Internal: single `rebuild_mqtt` path shared by settings-save and home-arrival (was duplicated); the dead classic-Teams log fallback (`logs.txt`, retired 2024) is gone.
 
 ## [v1.3.14] — 2026-07-19
 ### Fixed
@@ -117,6 +123,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.4.0]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.0
 [v1.3.14]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.14
 [v1.3.13]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.13
 [v1.3.12]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.12

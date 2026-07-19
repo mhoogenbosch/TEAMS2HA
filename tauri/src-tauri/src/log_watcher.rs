@@ -19,17 +19,29 @@ pub fn start(tx: mpsc::Sender<LogEvent>) {
     tauri::async_runtime::spawn(poll_loop(tx));
 }
 
+/// How often to rescan the log directory for a rotated/newer file. The 250 ms
+/// tick below only tails the already-open handle; a full directory scan
+/// (read_dir + metadata per file) 4×/s was the most expensive idle work in the
+/// app, and rotation being noticed a few seconds late is harmless.
+const LOG_RESCAN: Duration = Duration::from_secs(5);
+
 async fn poll_loop(tx: mpsc::Sender<LogEvent>) {
     let mut current_file: Option<PathBuf> = None;
     let mut file_handle: Option<(BufReader<File>, u64)> = None;
     let mut in_call = false;
 
     let mut tick = interval(Duration::from_millis(250));
+    let mut latest_cached: Option<PathBuf> = None;
+    let mut next_scan = tokio::time::Instant::now();
 
     loop {
         tick.tick().await;
 
-        let latest = match find_latest_log() {
+        if tokio::time::Instant::now() >= next_scan {
+            next_scan = tokio::time::Instant::now() + LOG_RESCAN;
+            latest_cached = find_latest_log();
+        }
+        let latest = match latest_cached.clone() {
             Some(p) => p,
             None => continue,
         };
@@ -150,6 +162,9 @@ fn extract_presence(line: &str) -> Option<String> {
 }
 
 fn find_latest_log() -> Option<PathBuf> {
+    // Classic-Teams fallback (…\Microsoft\Teams\logs.txt) removed: classic Teams
+    // was retired by Microsoft in 2024; the packaged new-Teams dir is the only
+    // log source left. read_dir on a missing dir simply yields None.
     let teams_appdata = std::env::var("LOCALAPPDATA").ok()?;
     let log_dir = PathBuf::from(&teams_appdata).join("Packages")
         .join("MSTeams_8wekyb3d8bbwe")
@@ -157,18 +172,6 @@ fn find_latest_log() -> Option<PathBuf> {
         .join("Microsoft")
         .join("MSTeams")
         .join("Logs");
-
-    if !log_dir.exists() {
-        // Fallback: classic Teams log location
-        let classic = PathBuf::from(&teams_appdata)
-            .join("Microsoft")
-            .join("Teams")
-            .join("logs.txt");
-        if classic.exists() {
-            return Some(classic);
-        }
-        return None;
-    }
 
     std::fs::read_dir(&log_dir)
         .ok()?

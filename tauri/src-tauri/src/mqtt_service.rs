@@ -3,7 +3,7 @@ use anyhow::Result;
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
 use serde_json::json;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,7 +126,7 @@ impl MqttService {
                     event = eventloop.poll() => match event {
                         Ok(Event::Incoming(Packet::ConnAck(_))) => {
                             log::info!("MQTT: connected to broker");
-                            app.emit("mqtt-status", "Connected").ok();
+                            crate::emit_status(&app, "Connected");
                             publish_availability(&client_clone, &prefix_clone, true);
                             subscribe(&client_clone, &prefix_clone);
                             publish_discovery_inner(&client_clone, &prefix_clone);
@@ -140,7 +140,7 @@ impl MqttService {
                         }
                         Err(e) => {
                             log::warn!("MQTT error: {e}");
-                            app.emit("mqtt-status", "Disconnected").ok();
+                            crate::emit_status(&app, "Disconnected");
                             // Wait before retry, but honour stop signal.
                             tokio::select! {
                                 _ = stop_rx.changed() => break,
