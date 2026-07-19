@@ -1,4 +1,5 @@
 mod app_state;
+mod dpapi;
 mod home_network;
 mod log_watcher;
 mod mic_control;

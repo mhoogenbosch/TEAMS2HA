@@ -11,6 +11,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 - **The app could freeze entirely while the broker was unreachable on the home network.** State publishes went into a bounded MQTT request queue that is not drained during the 5-second reconnect-retry sleep; once full, the awaited publish blocked the central event loop and, cascading, every monitor thread. All state/discovery publishes now use the non-blocking `try_publish`/`try_subscribe` (with a larger queue), so events keep flowing and a failed delivery is simply retried.
 - **A failed state publish was cached as delivered.** `publish_state` logged individual publish errors but always reported success, so the "only cache after a successful publish" retry mechanism never actually retried — a mute/meeting flank could be lost for good if the broker hiccuped at the wrong moment. Publish failures now propagate and the state is re-sent on the next event or reconnect.
 - **Presence transition lines could report the old status.** Log lines that name two statuses ("from Busy to Available") matched the first keyword in a fixed list instead of the most recent one. The parser now takes the status closest to the end of the line, with word-boundary matching (e.g. "Available" no longer matches inside "Unavailable").
+### Security
+- **The MQTT password is now encrypted at rest with Windows DPAPI** (user scope, `dpapi:<hex>` in settings.json) instead of stored in plain text. An existing plaintext password keeps working and is migrated automatically on the next settings save. The WPF app had this protection; it was lost in the Tauri rewrite.
+- **The Run-at-boot registry value now quotes the executable path.** An unquoted path with spaces is the classic unquoted-path problem: broken autostart at best, binary planting at worst.
+- **The "Ignore Cert Errors" toggle is removed from the UI.** The backend has ignored it since v1.3.8 (when it stopped silently downgrading TLS to plain TCP), so the toggle only suggested a capability that does not exist. TLS connections always verify the certificate.
+- **A Content Security Policy is now set** for the app window (previously `null`). Defence in depth: broker-supplied strings end up in the UI, and a strict CSP limits what any future injection could do.
+- **Toast payloads from MQTT are capped at 1 KB** before being handed to the Windows notification pipeline.
 
 ## [v1.3.14] — 2026-07-19
 ### Fixed

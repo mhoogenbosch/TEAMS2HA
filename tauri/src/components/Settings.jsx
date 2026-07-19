@@ -41,12 +41,17 @@ export default function Settings() {
     setSaveStatus("saving");
     const timer = setTimeout(async () => {
       try {
-        await invoke("save_settings", { settings });
+        // The port field may hold an in-progress string ("", "88…"); persist a
+        // clamped number without fighting the user's typing in the input itself.
+        await invoke("save_settings", {
+          settings: { ...settings, mqttPort: clampPort(settings.mqttPort) },
+        });
         lastSavedRef.current = snapshot;
         setSaveStatus("saved");
         setTimeout(() => setSaveStatus((s) => (s === "saved" ? null : s)), 2500);
       } catch (err) {
         setSaveStatus("error: " + err);
+        setTimeout(() => setSaveStatus((s) => (s && String(s).startsWith("error") ? null : s)), 5000);
       }
     }, 1500);
     return () => clearTimeout(timer);
@@ -106,7 +111,7 @@ export default function Settings() {
             <input
               type="number"
               value={settings.mqttPort}
-              onChange={(e) => set("mqttPort", parseInt(e.target.value) || 1883)}
+              onChange={(e) => set("mqttPort", e.target.value)}
               min={1}
               max={65535}
             />
@@ -132,15 +137,13 @@ export default function Settings() {
         </div>
 
         <div className="chip-row">
+          {/* "Ignore Cert Errors" is gone on purpose: the backend never supported
+              it safely (it used to downgrade TLS to plain TCP) and ignores the
+              flag — a visible toggle that does nothing only misleads. */}
           <Chip
             label="TLS"
             checked={settings.useTls}
             onChange={(v) => set("useTls", v)}
-          />
-          <Chip
-            label="Ignore Cert Errors"
-            checked={settings.ignoreCertErrors}
-            onChange={(v) => set("ignoreCertErrors", v)}
           />
           <Chip
             label="WebSockets"
@@ -237,6 +240,12 @@ export default function Settings() {
 
     </form>
   );
+}
+
+function clampPort(value) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return 1883;
+  return Math.min(65535, Math.max(1, n));
 }
 
 function Chip({ label, checked, onChange }) {
