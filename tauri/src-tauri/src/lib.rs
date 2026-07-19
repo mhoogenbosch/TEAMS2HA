@@ -408,7 +408,7 @@ async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force
     };
     let mut delivered = false;
     if let Some(svc) = mqtt.read().await.as_ref() {
-        match svc.publish_state(&state).await {
+        match svc.publish_state(&state) {
             Ok(()) => delivered = true,
             Err(e) => log::warn!("Publish state error: {e}"),
         }
@@ -429,11 +429,6 @@ async fn handle_mqtt_command(
     app: &AppHandle,
 ) {
     match cmd {
-        // The Teams local API was retired by Microsoft; these switches are
-        // effectively read-only and the commands go nowhere.
-        MqttCommand::ToggleMute | MqttCommand::ToggleVideo => {
-            log::info!("MQTT command received (no Teams API to forward to)");
-        }
         MqttCommand::SetSystemMicMute(muted) => {
             let result =
                 tokio::task::spawn_blocking(move || mic_control::set_system_mic_mute(muted)).await;
