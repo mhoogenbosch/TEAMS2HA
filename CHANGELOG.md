@@ -3,7 +3,17 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
-## [Unreleased — v1.3.8]
+## [Unreleased — v1.3.9]
+### Added
+- **In-app Updates card** at the top of the window: shows the installed version and update status, with an explicit *Check for Updates* / *Install & Restart* button and a download progress bar. Replaces the `window.confirm()` prompt entirely.
+- The update check now also runs **every hour**, not only at startup. When a background check finds an update, the window is brought up so it gets noticed.
+### Fixed
+- Applied review feedback from upstream PRs [#97](https://github.com/jimmyeao/TEAMS2HA/pull/97)/[#99](https://github.com/jimmyeao/TEAMS2HA/pull/99): single read-lock in `publish()`, and the mute-state cache is cleared when no Teams capture session exists so a new call's first reading always produces an event.
+### Changed
+- The main window no longer shows a scrollbar (content still scrolls); default window height increased to 780 px so everything fits.
+- The legacy .NET/WPF app was removed from the repository (dormant, relied on the deprecated Teams local API; still available in git history and upstream).
+
+## [v1.3.8] — 2026-07-19
 ### Fixed
 - **Repaired the v1.3.7 regression.** v1.3.7 was accidentally built from a base without the fork features (home-network gating, availability/LWT, Modern Standby resume, close-to-tray, panic logging, `sw_version`). `master` is now synced with upstream (which merged those features via [PR #93](https://github.com/jimmyeao/TEAMS2HA/pull/93)) and carries the remaining fork commits, so this is the first release with **both** the auto-updater and all features. v1.3.7 is marked as a pre-release with a do-not-install warning.
 - TLS transport selection: "Use TLS" combined with "ignore certificate errors" silently connected over **plain TCP**, and TLS + websockets produced `ws://` instead of `wss://`. TLS now always yields an encrypted transport; the unsupported cert-skip flag logs a warning.
@@ -13,7 +23,6 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Changed
 - State is published to MQTT only when it actually changed (a fresh connection still pushes the full state); the per-publish log line moved to debug level. Keeps `teams2ha.log` and the broker a lot quieter.
 ### Removed
-- The **legacy .NET/WPF app** (repo root). It relied on the Teams local API that Microsoft deprecated and was no longer built or released; the source remains in the git history and upstream. The CodeQL C# analysis went with it.
 - The `hasunreadmessages` binary sensor. Its heuristic matched practically every Teams log line, making the sensor meaningless; there is no reliable unread signal in the Teams logs. The retained discovery config is cleaned up automatically, removing the stale entity from Home Assistant.
 
 ## [v1.3.7] — 2026-07-19
