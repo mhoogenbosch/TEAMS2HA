@@ -3,6 +3,12 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.3.14] — 2026-07-19
+### Fixed
+- **v1.3.13 rendered a blank window.** The auto-save code used `useRef` without importing it — a runtime `ReferenceError` that the vite build does not catch, crashing the entire UI on load (the MQTT bridge kept running). v1.3.13 installs must update to this version manually: the in-app updater lives in the UI that fails to render. ESLint (`no-undef`) now runs in CI so this class of error fails the build instead of shipping.
+### Added
+- The window title shows the running version ("Teams2HA v1.3.14").
+
 ## [v1.3.13] — 2026-07-19
 ### Changed
 - **Settings auto-save.** The Save button is gone; changes persist automatically 1.5 s after the last edit, with a small "✓ Saved" indicator. The MQTT connection is only rebuilt when a connection-relevant field actually changed (address, port, credentials, prefix, TLS/WebSocket flags) — switching the theme no longer drops the broker session.
@@ -96,6 +102,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.3.14]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.14
 [v1.3.13]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.13
 [v1.3.12]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.12
 [v1.3.11]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.11
