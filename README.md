@@ -68,8 +68,9 @@ Each carries an availability topic so HA shows them as `unavailable` when the ap
 
 | Path | Contents |
 |------|----------|
-| `tauri/` | **The maintained app** — Rust/Tauri backend (`src-tauri/`) + React frontend (`src/`). This is what the releases build. |
-| repo root (`*.csproj`, `*.xaml`, `API/`, …) | The **legacy .NET/WPF app**, kept dormant in case Microsoft reverses the local-API decision. Not built or released. |
+| `tauri/` | **The app** — Rust/Tauri backend (`src-tauri/`) + React frontend (`src/`). This is what the releases build. |
+
+The legacy .NET/WPF app that used to live in the repository root was removed — it depended on the Teams local API that Microsoft deprecated, and it was no longer built or released. It remains available in the git history and upstream.
 
 ## Building (Tauri app)
 
