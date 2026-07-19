@@ -362,10 +362,13 @@ async fn handle_home_change(
 /// fire far more often than the state actually changes. The ConnAck path passes
 /// `force` true so a fresh connection always gets a full state push.
 async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force: bool) {
-    let state = shared.read().await.meeting.clone();
-    if !force && shared.read().await.last_published.as_ref() == Some(&state) {
-        return;
-    }
+    let state = {
+        let s = shared.read().await;
+        if !force && s.last_published.as_ref() == Some(&s.meeting) {
+            return;
+        }
+        s.meeting.clone()
+    };
     let mut delivered = false;
     if let Some(svc) = mqtt.read().await.as_ref() {
         match svc.publish_state(&state).await {
