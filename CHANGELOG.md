@@ -3,6 +3,12 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.3.10] — 2026-07-19
+### Added
+- **Release Notes button** in the Updates card. Opens the GitHub release page for the offered update (or, when up to date, the installed version) in the default browser, where the notes render properly — instead of the raw markdown the old `window.confirm()` prompt used to show.
+### Fixed
+- A scrollbar could still appear around the window itself (e.g. when the Updates card grows or wraps); window-level scrolling is now disabled entirely — the content area remains the only (invisible) scroller, and the updater row wraps cleanly now that it holds two buttons.
+
 ## [v1.3.9] — 2026-07-19
 ### Added
 - **In-app Updates card** at the top of the window: shows the installed version and update status, with an explicit *Check for Updates* / *Install & Restart* button and a download progress bar. Replaces the `window.confirm()` prompt entirely.
@@ -71,6 +77,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.3.10]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.10
 [v1.3.9]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.9
 [v1.3.8]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.8
 [v1.3.7]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.7
