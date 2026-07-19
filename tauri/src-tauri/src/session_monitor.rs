@@ -102,10 +102,12 @@ unsafe extern "system" fn wndproc(
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
-    use windows::Win32::System::RemoteDesktop::{WTS_SESSION_LOCK, WTS_SESSION_UNLOCK};
     use windows::Win32::UI::WindowsAndMessaging::DefWindowProcW;
 
+    // From WinUser.h — these constants are not exposed by the windows crate.
     const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+    const WTS_SESSION_LOCK: u32 = 0x7;
+    const WTS_SESSION_UNLOCK: u32 = 0x8;
 
     if msg == WM_WTSSESSION_CHANGE {
         let locked = match wparam.0 as u32 {
