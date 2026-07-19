@@ -258,7 +258,7 @@ pub fn run() {
                         Some(()) = reconnect_rx.recv() => {
                             // ConnAck received — push current state so HA sensors
                             // get real values immediately rather than waiting for a change.
-                            publish(&mqtt_h3, &handle3, &shared2).await;
+                            publish(&mqtt_h3, &handle3, &shared2, true).await;
                         }
                         Some(ev) = home_rx.recv() => {
                             handle_home_event(ev, &mqtt_h3, &handle3, &cmd_tx3, &reconnect_tx3).await;
@@ -357,12 +357,26 @@ async fn handle_home_change(
     }
 }
 
-async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState) {
+/// Publish the current state to MQTT and the UI. With `force` false the publish is
+/// skipped when nothing changed since the last successful publish — monitor events
+/// fire far more often than the state actually changes. The ConnAck path passes
+/// `force` true so a fresh connection always gets a full state push.
+async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force: bool) {
     let state = shared.read().await.meeting.clone();
+    if !force && shared.read().await.last_published.as_ref() == Some(&state) {
+        return;
+    }
+    let mut delivered = false;
     if let Some(svc) = mqtt.read().await.as_ref() {
-        if let Err(e) = svc.publish_state(&state).await {
-            log::warn!("Publish state error: {e}");
+        match svc.publish_state(&state).await {
+            Ok(()) => delivered = true,
+            Err(e) => log::warn!("Publish state error: {e}"),
         }
+    }
+    if delivered {
+        // Only cache after success: a failed/skipped delivery (e.g. MQTT paused)
+        // must be retried on the next event or the ConnAck re-publish.
+        shared.write().await.last_published = Some(state.clone());
     }
     app.emit("state-update", &state).ok();
 }
@@ -386,7 +400,7 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
         LogEvent::UnreadMessages(u) => s.meeting.has_unread_messages = u,
     }
     drop(s);
-    publish(mqtt, app, shared).await;
+    publish(mqtt, app, shared, false).await;
 }
 
 async fn handle_wasapi_event(
@@ -401,7 +415,7 @@ async fn handle_wasapi_event(
         s.meeting.is_muted = muted;
     }
     drop(s);
-    publish(mqtt, app, shared).await;
+    publish(mqtt, app, shared, false).await;
 }
 
 async fn handle_registry_event(
@@ -427,7 +441,7 @@ async fn handle_registry_event(
         }
     }
     drop(s);
-    publish(mqtt, app, shared).await;
+    publish(mqtt, app, shared, false).await;
 }
 
 async fn handle_process_event(
@@ -440,5 +454,5 @@ async fn handle_process_event(
     let mut s = shared.write().await;
     s.meeting.teams_running = running;
     drop(s);
-    publish(mqtt, app, shared).await;
+    publish(mqtt, app, shared, false).await;
 }
