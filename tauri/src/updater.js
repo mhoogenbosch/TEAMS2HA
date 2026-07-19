@@ -1,5 +1,6 @@
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // Checks the GitHub releases feed (via the endpoint configured in
 // tauri.conf.json -> plugins.updater) for a newer, signed version. When one is
@@ -13,6 +14,17 @@ export async function checkForUpdates({ silent = true } = {}) {
     if (!update) {
       if (!silent) window.alert("Je gebruikt de nieuwste versie van Teams2HA.");
       return;
+    }
+
+    // The app usually starts hidden in the tray ("run minimized"); a confirm()
+    // fired in a hidden window is invisible, so the update would never proceed.
+    // Bring the window up before asking.
+    try {
+      const win = getCurrentWindow();
+      await win.show();
+      await win.setFocus();
+    } catch (e) {
+      console.warn("Kon venster niet tonen voor update-prompt:", e);
     }
 
     const ok = window.confirm(
