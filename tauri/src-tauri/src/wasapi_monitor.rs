@@ -40,7 +40,11 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
         loop {
             std::thread::sleep(Duration::from_millis(250));
 
-            let muted = check_teams_mute(&enumerator);
+            // None = no usable reading (COM error or no Teams capture session);
+            // keep the last known state instead of inventing a mute flank.
+            let Some(muted) = check_teams_mute(&enumerator) else {
+                continue;
+            };
             if Some(muted) != last_muted {
                 last_muted = Some(muted);
                 log::info!("WasapiMonitor: mute → {muted}");
@@ -50,10 +54,14 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
     }
 }
 
+/// Some(muted) when a Teams capture session was found; None when there is nothing
+/// to measure (no Teams session) or the audio API failed. Previously both cases
+/// were reported as "muted", so a transient COM hiccup mid-call produced a false
+/// mute flank.
 #[cfg(windows)]
 unsafe fn check_teams_mute(
     enumerator: &windows::Win32::Media::Audio::IMMDeviceEnumerator,
-) -> bool {
+) -> Option<bool> {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
         eCapture, IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
@@ -61,15 +69,8 @@ unsafe fn check_teams_mute(
     };
     use windows::Win32::System::Com::CLSCTX_ALL;
 
-    let collection = match enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) {
-        Ok(c) => c,
-        Err(_) => return true,
-    };
-
-    let count = match collection.GetCount() {
-        Ok(c) => c,
-        Err(_) => return true,
-    };
+    let collection = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE).ok()?;
+    let count = collection.GetCount().ok()?;
 
     let mut teams_found = false;
     let mut teams_hw_muted = false;
@@ -130,7 +131,11 @@ unsafe fn check_teams_mute(
         }
     }
 
-    !teams_found || teams_hw_muted
+    if teams_found {
+        Some(teams_hw_muted)
+    } else {
+        None
+    }
 }
 
 #[cfg(windows)]
