@@ -6,6 +6,9 @@ use tokio::sync::mpsc;
 use tokio::time::interval;
 
 #[derive(Debug, Clone)]
+// The shared "Changed" postfix is deliberate: it matches the other monitors'
+// event enums and lib.rs match arms; renaming buys nothing but churn.
+#[allow(clippy::enum_variant_names)]
 pub enum LogEvent {
     MuteChanged(bool),
     MeetingChanged(bool),
