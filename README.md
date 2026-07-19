@@ -44,7 +44,7 @@ Microsoft deprecated the Teams **local API**, which broke the classic integratio
 ## Configuration
 
 ### MQTT
-Provide your MQTT broker details (host, username, password). The password is encrypted before being written to the settings file — never stored in clear text. Supported: plain MQTT, MQTT over TLS, MQTT over WebSockets, and WebSockets over TLS, with an option to ignore certificate errors for self-signed setups (Let's Encrypt is strongly recommended as a minimum).
+Provide your MQTT broker details (host, username, password). The password is encrypted with Windows DPAPI (user scope) before being written to the settings file — never stored in clear text; an existing plaintext value is migrated on the next save. Supported: plain MQTT, MQTT over TLS, MQTT over WebSockets, and WebSockets over TLS. Certificate verification is always on — the old "ignore certificate errors" option is gone (it used to silently downgrade to an unencrypted connection).
 
 ### Home Detection (this fork)
 Under **Settings → Home Detection**, click **Use Current Network** while on your home Wi-Fi/LAN to store your gateway's MAC address. The app then only connects to MQTT when that gateway is present — so it stays quiet on other networks even when the broker is reachable over a VPN.

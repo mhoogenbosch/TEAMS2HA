@@ -13,6 +13,10 @@ pub struct Settings {
     pub mqtt_password: String,
     pub sensor_prefix: String,
     pub use_tls: bool,
+    /// Legacy flag: certificate verification can no longer be disabled (the old
+    /// implementation silently downgraded TLS to plain TCP). Kept for settings-file
+    /// compatibility; no longer shown in the UI.
+    #[serde(default)]
     pub ignore_cert_errors: bool,
     pub use_websockets: bool,
     pub run_at_boot: bool,
@@ -62,7 +66,11 @@ impl Settings {
             return Ok(Self::default());
         }
         let json = fs::read_to_string(&path)?;
-        Ok(serde_json::from_str(&json)?)
+        let mut settings: Self = serde_json::from_str(&json)?;
+        // On-disk password is DPAPI-protected ("dpapi:<hex>"); legacy plaintext
+        // passes through unchanged and gets encrypted on the next save.
+        settings.mqtt_password = crate::dpapi::reveal(&settings.mqtt_password);
+        Ok(settings)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -70,7 +78,9 @@ impl Settings {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let json = serde_json::to_string_pretty(self)?;
+        let mut on_disk = self.clone();
+        on_disk.mqtt_password = crate::dpapi::conceal(&self.mqtt_password);
+        let json = serde_json::to_string_pretty(&on_disk)?;
         fs::write(&path, json)?;
         self.apply_run_at_boot();
         Ok(())
@@ -90,7 +100,10 @@ impl Settings {
         if let Some(key) = run_key {
             if self.run_at_boot {
                 if let Ok(exe) = std::env::current_exe() {
-                    let _ = key.set_value("Teams2HA", &exe.to_string_lossy().as_ref());
+                    // Quote the path: an unquoted Run value with spaces is the classic
+                    // unquoted-path problem (Windows tries "C:\Users\First.exe" first) —
+                    // broken autostart at best, binary planting at worst.
+                    let _ = key.set_value("Teams2HA", &format!("\"{}\"", exe.display()));
                 }
             } else {
                 let _ = key.delete_value("Teams2HA");

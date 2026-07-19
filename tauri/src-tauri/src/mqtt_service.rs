@@ -382,8 +382,15 @@ async fn handle_incoming(
 
     if topic == notify_topic(prefix) {
         if !payload_str.is_empty() {
+            // Cap what an arbitrary broker client can push into a Windows toast.
+            // Truncation may break a >1 KB JSON payload mid-string; it then falls
+            // back to being shown as plain text, which is fine for garbage input.
+            let mut end = payload_str.len().min(1024);
+            while !payload_str.is_char_boundary(end) {
+                end -= 1;
+            }
             let _ = cmd_tx
-                .send(MqttCommand::Notify(payload_str.to_string()))
+                .send(MqttCommand::Notify(payload_str[..end].to_string()))
                 .await;
         }
         return;
