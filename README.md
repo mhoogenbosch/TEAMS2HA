@@ -1,41 +1,96 @@
-[![CodeQL](https://github.com/jimmyeao/TEAMS2HA/actions/workflows/codeql.yml/badge.svg)](https://github.com/jimmyeao/TEAMS2HA/actions/workflows/codeql.yml)[![GitHub tag](https://img.shields.io/github/tag/jimmyeao/TEAMS2HA?include_prereleases=&sort=semver&color=blue)](https://github.com/jimmyeao/TEAMS2HA/releases/)
+# Teams2HA
+
+Bridge your Microsoft Teams status to Home Assistant over MQTT — meeting state, presence, mute and video, published as native HA entities.
+
+> **This is a fork.** Teams2HA was created and is maintained by **[jimmyeao](https://github.com/jimmyeao/TEAMS2HA)** — all credit for the original app and the Rust/Tauri rewrite goes to them. This fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) adds a signed auto-updater, home-network gating and MQTT availability/LWT on top of that work. Where possible, changes are offered back upstream as pull requests.
+
 [![License](https://img.shields.io/badge/License-MIT-blue)](#license)
-[![issues - Teams2HA](https://img.shields.io/github/issues/jimmyeao/TEAMS2HA)](https://github.com/jimmyeao/TEAMS2HA/issues)
 
-<H1>Teams2HA</H1>
+---
 
-<H1>IMPORTANT</H1>
-  
-Microsoft are deprecating the Teams local API, which has sadly broken our application.
-I have written a new lightweight version in Rust/Tauri that uses teams logs and hardware signals to see if you are in a meeting, get your status, mute state and video state. You will need to remove the old version, and install this version - admin rights are NOT required.
+## Why a Rust/Tauri app?
 
-Download the latest version from https://github.com/jimmyeao/TEAMS2HA/releases (app will auto update once installed)
-<img width="822" height="712" alt="image" src="https://github.com/user-attachments/assets/5595f5ff-e4f3-44e6-8054-1cc381370fab" />
+Microsoft deprecated the Teams **local API**, which broke the classic integration. Instead of that API, Teams2HA now reads **Teams log files** and **hardware signals** (microphone/camera use, audio session state) to determine whether you are in a meeting and what your status, mute and video state are. It's a small, windowless tray app.
 
+- **No admin rights required** — installs per-user to `%LOCALAPPDATA%`.
+- **Windows x64 and ARM64** builds.
 
-<h2>MQTT</h2>
+## What this fork adds
 
-Provide your MQTT instance details (IP, username and password) The password is encrypted before being saved to the settings file and is not stored in clear text.
-We support plain MQTT, MQTT over TLS, MQTT over Websockets and MQTT over Websockets with TLS and the ability to ignore certificate errors if you are using self-signed certs (I would strongly advise you to use Lets Encrypt as a minimum)
+| Feature | What it does |
+|---|---|
+| 🔄 **Signed auto-updater** | On startup the app checks GitHub for a newer **signed** release and can download, install and relaunch itself (Tauri updater + minisign signature verification). Live since **v1.3.7**. |
+| 🏠 **Home-network gating** | Only connects to MQTT when you're on your home network, matched on the **default-gateway MAC** (Settings → Home Detection → *Use Current Network*). Leave empty to always connect. |
+| 🟢 **Availability / LWT** | Every entity has an `availability_topic` with a retained **Last Will**. When the app is closed, asleep, crashed or away, its entities go `unavailable` in HA — this is the structural fix for a "sticky" `is_in_meeting`. |
+| 🧾 **Device `sw_version`** | The installed version is reported in the MQTT discovery device block. |
+| 🗕 **Close-to-tray** | The window close button hides to the tray instead of quitting (keeping the MQTT bridge alive). |
+| 💤 **Modern Standby resume** | Reconnects and republishes state after sleep/standby. |
 
-<h2>Entities</h2>
+## Installation
 
-This is how it should look in MQTT in Homeassistant
+1. Download the installer for your architecture from the [**latest release**](https://github.com/mhoogenbosch/TEAMS2HA/releases/latest) and run it.
 
-The topic will be 
-- homeassistant/switch/YOURNAME/ismuted
-- homeassistant/switch/YOURNAME/isvideoon
-- homeassistant/sensor/YOURNAME/teamsstatus/state
-- homeassistant/sensor/YOURNAME/presence/state
-- homeassistant/binary_sensor/YOURNAME/isinmeeting/state
-- homeassistant/binary_sensor/YOURNAME/teamsrunning/state
+   | File | Architecture |
+   |------|-------------|
+   | `Teams2HA_*_x64-setup.exe` | Intel / AMD (most PCs) |
+   | `Teams2HA_*_arm64-setup.exe` | ARM64 (Surface Pro X, Copilot+ PCs) |
 
-<img width="1037" height="584" alt="image" src="https://github.com/user-attachments/assets/476b0107-d738-4f37-96a4-a50b9ed3ed6a" />
+2. If you previously had the old .NET version installed, it is automatically removed on first launch.
 
-(note, 2 way control is not possible at the moment, investigating the reliability of addign this in)
+> **First install is manual, after that it's automatic.** Versions before v1.3.7 had no updater, so you install v1.3.7 by hand once; every release after that installs itself.
+>
+> **SmartScreen / Defender:** the installers are signed for *update authenticity* (minisign) but are **not** Authenticode-signed, so Windows Defender may occasionally flag a fresh build as a false positive (`Trojan:Win32/Bearfoos.B!ml`). Choose *Allow* / *Keep* if that happens.
 
-Footnote: I have left the old .net source code intact, in case Microsoft reverse their decidion, the new code is in the Tauri folder, if you need to make changes. PRs always welcome :)
+## Configuration
 
+### MQTT
+Provide your MQTT broker details (host, username, password). The password is encrypted before being written to the settings file — never stored in clear text. Supported: plain MQTT, MQTT over TLS, MQTT over WebSockets, and WebSockets over TLS, with an option to ignore certificate errors for self-signed setups (Let's Encrypt is strongly recommended as a minimum).
 
+### Home Detection (this fork)
+Under **Settings → Home Detection**, click **Use Current Network** while on your home Wi-Fi/LAN to store your gateway's MAC address. The app then only connects to MQTT when that gateway is present — so it stays quiet on other networks even when the broker is reachable over a VPN.
 
+## Entities
 
+Published via MQTT discovery under your chosen name:
+
+- `switch/<YOURNAME>/ismuted`
+- `switch/<YOURNAME>/isvideoon`
+- `sensor/<YOURNAME>/teamsstatus`
+- `sensor/<YOURNAME>/presence`
+- `binary_sensor/<YOURNAME>/isinmeeting`
+- `binary_sensor/<YOURNAME>/teamsrunning`
+
+Each carries an availability topic so HA shows them as `unavailable` when the app is away.
+
+> **Two-way control is limited.** Because Microsoft deprecated the Teams local API, the `ismuted` / `isvideoon` switches are effectively read-only — commands have nowhere to go. They reflect state rather than control Teams.
+
+## Repository layout
+
+| Path | Contents |
+|------|----------|
+| `tauri/` | **The maintained app** — Rust/Tauri backend (`src-tauri/`) + React frontend (`src/`). This is what the releases build. |
+| repo root (`*.csproj`, `*.xaml`, `API/`, …) | The **legacy .NET/WPF app**, kept dormant in case Microsoft reverses the local-API decision. Not built or released. |
+
+## Building (Tauri app)
+
+```bash
+cd tauri
+npm install
+npm run tauri dev      # run locally
+npm run tauri build    # produce an installer
+```
+
+Releases are produced by GitHub Actions on a `vX.Y.Z` tag (`.github/workflows/release.yml`), which builds x64 + ARM64, signs the updater artifacts and publishes `latest.json` alongside the installers.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## Credits
+
+- **Original author & maintainer:** [jimmyeao](https://github.com/jimmyeao) — [jimmyeao/TEAMS2HA](https://github.com/jimmyeao/TEAMS2HA). The application, the Rust/Tauri rewrite and the core design are theirs.
+- This fork is maintained by [mhoogenbosch](https://github.com/mhoogenbosch); PRs are contributed back upstream where they make sense.
+
+## License
+
+MIT — see the upstream project. PRs always welcome. 🙂
