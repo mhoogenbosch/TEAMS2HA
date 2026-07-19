@@ -3,6 +3,16 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.3.12] — 2026-07-19
+### Added
+- **Controllable system-mic mute switch** (`Mic Muted (System)`): mutes the default communications microphone at the Windows level via the audio endpoint API, so it genuinely works from Home Assistant — unlike the Teams-session switches, which lost their command path when Microsoft retired the Teams local API. State is polled and stays in sync when you mute via Windows itself.
+- **Session Locked binary sensor**: Windows lock/unlock events (WTS session notifications) as an at-desk signal for automations.
+- **Toast notifications from Home Assistant**: a `notify` entity (MQTT discovery) per machine; `notify.send_message` shows the message as a Windows toast. Payload can be plain text or JSON with `title`/`message`.
+- **Tray icon status dot**: red while in a meeting, orange while muted (system-wide, or Teams-muted during a call), with a matching tooltip.
+- The sensor strip shows the system microphone state as a fourth pill.
+### Changed
+- Release notes are now composed automatically: the release body starts with the tag's section from this changelog, followed by the install instructions (moved to `.github/RELEASE_TEMPLATE.md`).
+
 ## [v1.3.11] — 2026-07-19
 ### Added
 - **"System" theme option.** The light/dark toggle is now a three-way choice (System / Light / Dark). "System" follows the Windows app theme live — switching Windows between light and dark mode restyles the app immediately.
@@ -82,6 +92,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.3.12]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.12
 [v1.3.11]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.11
 [v1.3.10]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.10
 [v1.3.9]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.9
