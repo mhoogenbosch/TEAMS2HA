@@ -3,6 +3,18 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [Unreleased — v1.3.8]
+### Fixed
+- **Repaired the v1.3.7 regression.** v1.3.7 was accidentally built from a base without the fork features (home-network gating, availability/LWT, Modern Standby resume, close-to-tray, panic logging, `sw_version`). `master` is now synced with upstream (which merged those features via [PR #93](https://github.com/jimmyeao/TEAMS2HA/pull/93)) and carries the remaining fork commits, so this is the first release with **both** the auto-updater and all features. v1.3.7 is marked as a pre-release with a do-not-install warning.
+- TLS transport selection: "Use TLS" combined with "ignore certificate errors" silently connected over **plain TCP**, and TLS + websockets produced `ws://` instead of `wss://`. TLS now always yields an encrypted transport; the unsupported cert-skip flag logs a warning.
+- Updater prompt was fired in a hidden window (the app starts minimized to the tray), so an available update could never be confirmed. The window is now shown and focused first.
+- Home detection: a crashed gateway-MAC lookup counted as "home" while a timed-out one counted as "not home"; both now resolve to "not home" (debounced as before).
+- Mute detection: audio-API (COM) failures and "no Teams capture session" were both reported as *muted*, so a transient hiccup mid-call could produce a false mute flank. No reading now keeps the last known state.
+### Changed
+- State is published to MQTT only when it actually changed (a fresh connection still pushes the full state); the per-publish log line moved to debug level. Keeps `teams2ha.log` and the broker a lot quieter.
+### Removed
+- The `hasunreadmessages` binary sensor. Its heuristic matched practically every Teams log line, making the sensor meaningless; there is no reliable unread signal in the Teams logs. The retained discovery config is cleaned up automatically, removing the stale entity from Home Assistant.
+
 ## [v1.3.7] — 2026-07-19
 ### Added
 - **Signed auto-updater.** The app now checks GitHub on startup for a newer signed release and can download, install and relaunch itself. Implemented with `tauri-plugin-updater` + `tauri-plugin-process`, a `plugins.updater` endpoint pointing at the release `latest.json`, an embedded minisign public key, and `createUpdaterArtifacts` in the build. Releases are signed in CI and now ship `latest.json` + `.sig` alongside the installers.
