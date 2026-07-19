@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
@@ -38,6 +39,14 @@
         "installMode": "currentUser",
         "displayLanguageSelector": false
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/mhoogenbosch/TEAMS2HA/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIwRDFDNTU1OTJBRUU4QTQKUldTazZLNlNWY1hSc0V6WUU1QW85eFdnWUZZV1AxZ1dPRzBjS296VzFIZ0tXNmVveDV6ZEFkMXIK"
     }
   }
 }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Settings from "./components/Settings";
 import StatusBar from "./components/StatusBar";
+import { checkForUpdates } from "./updater";
 import "./App.css";
 
 function App() {
@@ -17,6 +18,9 @@ function App() {
     // Poll current status immediately — events may have fired before listeners were ready
     invoke("get_mqtt_status").then(setMqttStatus).catch(console.error);
     invoke("get_state").then(setMeetingState).catch(console.error);
+
+    // Check for a newer signed release on startup (non-blocking, silent if up to date)
+    checkForUpdates();
 
     return () => {
       unlistenMqtt.then((f) => f());
