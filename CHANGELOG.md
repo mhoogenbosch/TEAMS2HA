@@ -13,6 +13,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Changed
 - State is published to MQTT only when it actually changed (a fresh connection still pushes the full state); the per-publish log line moved to debug level. Keeps `teams2ha.log` and the broker a lot quieter.
 ### Removed
+- The **legacy .NET/WPF app** (repo root). It relied on the Teams local API that Microsoft deprecated and was no longer built or released; the source remains in the git history and upstream. The CodeQL C# analysis went with it.
 - The `hasunreadmessages` binary sensor. Its heuristic matched practically every Teams log line, making the sensor meaningless; there is no reliable unread signal in the Teams logs. The retained discovery config is cleaned up automatically, removing the stale entity from Home Assistant.
 
 ## [v1.3.7] — 2026-07-19
@@ -59,7 +60,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ---
 
 ### Earlier versions (1.0.x – 1.2.x)
-These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source remains in the repository root, dormant.
+These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
 [v1.3.7]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.7
 [v1.3.6]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.6
