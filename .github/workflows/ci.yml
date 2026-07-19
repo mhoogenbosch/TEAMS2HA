@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - master
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    name: Build check (Tauri app)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tauri/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: tauri/src-tauri -> target
+          key: ci-check
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: tauri
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: tauri
+
+      - name: Cargo check
+        working-directory: tauri/src-tauri
+        run: cargo check --locked
