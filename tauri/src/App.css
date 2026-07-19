@@ -63,6 +63,34 @@ body {
 .app-main { flex: 1; overflow-y: auto; padding: 16px; scrollbar-width: none; }
 .app-main::-webkit-scrollbar { display: none; }
 
+/* Sensor strip — individual signals, directly below the header */
+.sensor-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 16px;
+  background: var(--surface);
+  box-shadow: 0 2px 4px rgba(0,0,0,.2);
+  flex-shrink: 0;
+}
+.sensor-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border: 1px solid var(--input-border);
+  border-radius: 12px;
+  padding: 3px 10px;
+}
+.sensor-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-dim); }
+.sensor-pill.sensor-ok .sensor-dot { background: var(--connected); }
+.sensor-pill.sensor-ok { color: var(--text); }
+.sensor-pill.sensor-active .sensor-dot { background: var(--in-meeting); }
+.sensor-pill.sensor-active { color: var(--text); }
+.sensor-pill.sensor-alert .sensor-dot { background: var(--disconnected); }
+.sensor-pill.sensor-alert { color: var(--text); }
+
 /* Status bar — lives in the header so always uses on-surface2 palette */
 .status-bar { display: flex; gap: 16px; }
 .status-indicator { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--on-surface2-dim); }

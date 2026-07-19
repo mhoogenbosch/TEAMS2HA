@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Settings from "./components/Settings";
 import StatusBar from "./components/StatusBar";
+import SensorStrip from "./components/SensorStrip";
 import UpdaterCard from "./components/UpdaterCard";
 import "./App.css";
 
@@ -36,6 +37,7 @@ function App() {
         </div>
         <StatusBar mqttStatus={mqttStatus} meetingState={meetingState} />
       </header>
+      <SensorStrip meetingState={meetingState} />
 
       <main className="app-main">
         <div className="settings-form">
