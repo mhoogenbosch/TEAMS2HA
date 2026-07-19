@@ -21,6 +21,7 @@ use registry_monitor::RegistryEvent;
 use session_monitor::SessionEvent;
 use settings::Settings;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -34,18 +35,35 @@ type CmdTx = Arc<mpsc::Sender<MqttCommand>>;
 type ReconnectTx = Arc<mpsc::Sender<()>>;
 type HomeMacTx = Arc<watch::Sender<String>>;
 
+/// Managed store for the MQTT status string. Deliberately a newtype: Tauri's
+/// state container is keyed by concrete type, and a bare
+/// `Arc<watch::Sender<String>>` would collide with `HomeMacTx` (manage() of a
+/// duplicate type is silently ignored — the two channels would cross wires).
+struct MqttStatus {
+    tx: watch::Sender<String>,
+    rx: watch::Receiver<String>,
+}
+
+/// Single source of truth for the MQTT status string: stores it (read back by
+/// `get_mqtt_status`) and notifies the UI. Everything that used to emit
+/// "mqtt-status" directly goes through here, so the polled status can no longer
+/// disagree with the events (the old `get_mqtt_status` reported "Connected"
+/// whenever a service object existed — also mid-reconnect-retry).
+pub(crate) fn emit_status(app: &AppHandle, status: &str) {
+    if let Some(store) = app.try_state::<MqttStatus>() {
+        let _ = store.tx.send(status.to_string());
+    }
+    app.emit("mqtt-status", status).ok();
+}
+
 #[tauri::command]
 async fn get_settings() -> Result<Settings, String> {
     Ok(Settings::load())
 }
 
 #[tauri::command]
-async fn get_mqtt_status(mqtt: State<'_, MqttHandle>) -> Result<String, String> {
-    Ok(if mqtt.read().await.is_some() {
-        "Connected".into()
-    } else {
-        "Disconnected".into()
-    })
+async fn get_mqtt_status(status: State<'_, MqttStatus>) -> Result<String, String> {
+    Ok(status.rx.borrow().clone())
 }
 
 #[tauri::command]
@@ -67,8 +85,18 @@ async fn save_settings(
     let old = Settings::load();
     settings.save().map_err(|e| e.to_string())?;
 
-    // Hand the (possibly changed) home MAC to the poller so it re-evaluates immediately.
-    let _ = home_mac_tx.send(settings.home_gateway_mac.clone());
+    // Hand a changed home MAC to the poller so it re-evaluates immediately.
+    // send_if_modified: with auto-save this command runs on every settings
+    // change, and an unconditional send would trigger an ARP lookup in the
+    // poller for every theme switch.
+    home_mac_tx.send_if_modified(|current| {
+        if *current == settings.home_gateway_mac {
+            false
+        } else {
+            current.clone_from(&settings.home_gateway_mac);
+            true
+        }
+    });
 
     // With auto-save this fires on every change (theme, run-at-boot, …). Only
     // touch the MQTT connection when a connection-relevant field changed —
@@ -86,33 +114,57 @@ async fn save_settings(
     }
 
     // Home gating: while away, keep MQTT paused. The poller reconnects on arrival.
-    // SendARP can block up to ~1s, so run it off the async executor.
+    // SendARP can block, so run it off the async executor — and cap the wait like
+    // the poller does (right after a resume a lookup can hang for many seconds).
+    // On timeout assume "home": a wrong pause here would drop a healthy
+    // connection, and the poller corrects the state within one poll interval.
     let mac = settings.home_gateway_mac.clone();
-    let is_home = tokio::task::spawn_blocking(move || home_network::is_home(&mac))
-        .await
-        .unwrap_or(true);
+    let is_home = match tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || home_network::is_home(&mac)),
+    )
+    .await
+    {
+        Ok(join) => join.unwrap_or(true),
+        Err(_) => {
+            log::warn!("Gateway MAC lookup timed out during settings save; assuming home");
+            true
+        }
+    };
     if !is_home {
         log::info!("Settings saved; not on the home network - MQTT stays paused.");
         *mqtt.write().await = None;
-        app.emit("mqtt-status", "Paused (not home)").ok();
+        emit_status(&app, "Paused (not home)");
         return Ok(());
     }
 
-    let tx: mpsc::Sender<MqttCommand> = (**cmd_tx).clone();
-    let rtx: mpsc::Sender<()> = (**reconnect_tx).clone();
-    match MqttService::connect(&settings, tx, rtx, app.clone()).await {
+    rebuild_mqtt(&settings, &mqtt, &app, &cmd_tx, &reconnect_tx).await;
+    Ok(())
+}
+
+
+/// Build a fresh MqttService from `settings` and store it in the handle,
+/// dropping (and thereby stopping) any previous service. Shared by the
+/// settings-save path and the home-network arrival path so connect/error
+/// handling lives in exactly one place.
+async fn rebuild_mqtt(
+    settings: &Settings,
+    mqtt: &MqttHandle,
+    app: &AppHandle,
+    cmd_tx: &mpsc::Sender<MqttCommand>,
+    reconnect_tx: &mpsc::Sender<()>,
+) {
+    match MqttService::connect(settings, cmd_tx.clone(), reconnect_tx.clone(), app.clone()).await {
         Ok(svc) => {
             *mqtt.write().await = Some(svc);
-            // "Connected" + state re-publish triggered by ConnAck in the eventloop
+            // "Connected" + state re-publish are triggered by ConnAck in the eventloop.
         }
         Err(e) => {
-            log::error!("MQTT reconnect failed: {e}");
+            log::warn!("MQTT connect failed: {e}");
             *mqtt.write().await = None;
-            app.emit("mqtt-status", "Disconnected").ok();
+            emit_status(app, "Disconnected");
         }
     }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -209,6 +261,13 @@ pub fn run() {
             // Shared state
             let shared = new_shared();
             let mqtt_handle: MqttHandle = Arc::new(RwLock::new(None));
+
+            // MQTT status store: written via emit_status, read by get_mqtt_status.
+            let (status_tx, status_rx) = watch::channel(String::from("Disconnected"));
+            app.manage(MqttStatus {
+                tx: status_tx,
+                rx: status_rx,
+            });
 
             // Persistent channels — shared across initial connect and all reconnects.
             let (cmd_tx, mut cmd_rx) = mpsc::channel::<MqttCommand>(16);
@@ -352,7 +411,7 @@ async fn handle_home_event(
             if is_home {
                 handle_home_change(true, mqtt, app, cmd_tx, reconnect_tx).await;
             } else {
-                app.emit("mqtt-status", "Paused (not home)").ok();
+                emit_status(app, "Paused (not home)");
             }
         }
     }
@@ -371,27 +430,17 @@ async fn handle_home_change(
         }
         let settings = Settings::load();
         if settings.mqtt_address.is_empty() {
-            app.emit("mqtt-status", "Disconnected").ok();
+            emit_status(app, "Disconnected");
             return;
         }
         log::info!("Home network detected - connecting to MQTT");
-        let tx: mpsc::Sender<MqttCommand> = (**cmd_tx).clone();
-        let rtx: mpsc::Sender<()> = (**reconnect_tx).clone();
-        match MqttService::connect(&settings, tx, rtx, app.clone()).await {
-            Ok(svc) => {
-                *mqtt.write().await = Some(svc);
-            }
-            Err(e) => {
-                log::warn!("MQTT connect on arriving home failed: {e}");
-                app.emit("mqtt-status", "Disconnected").ok();
-            }
-        }
+        rebuild_mqtt(&settings, mqtt, app, cmd_tx, reconnect_tx).await;
     } else {
         log::info!("Left the home network - pausing MQTT");
         // Dropping the service closes the TCP connection without a DISCONNECT packet, so the
         // broker publishes the Last Will ('offline') and HA marks all entities unavailable.
         *mqtt.write().await = None;
-        app.emit("mqtt-status", "Paused (not home)").ok();
+        emit_status(app, "Paused (not home)");
     }
 }
 
