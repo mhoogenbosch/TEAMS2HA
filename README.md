@@ -2,7 +2,7 @@
 
 Bridge your Microsoft Teams status to Home Assistant over MQTT — meeting state, presence, mute and video, published as native HA entities.
 
-> **This is a fork.** Teams2HA was created and is maintained by **[jimmyeao](https://github.com/jimmyeao/TEAMS2HA)** — all credit for the original app and the Rust/Tauri rewrite goes to them. This fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) adds a signed auto-updater, home-network gating and MQTT availability/LWT on top of that work. Where possible, changes are offered back upstream as pull requests.
+> **This is a fork.** Teams2HA was created and is maintained by **[jimmyeao](https://github.com/jimmyeao/TEAMS2HA)** — all credit for the original app and the Rust/Tauri rewrite goes to them. This fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) adds a signed auto-updater, home-network gating, MQTT availability/LWT, a controllable system-mic switch, session-lock sensing, HA-to-Windows toasts and assorted hardening on top of that work — see the table below. Where possible, changes are offered back upstream as pull requests.
 
 [![License](https://img.shields.io/badge/License-MIT-blue)](#license)
 
@@ -19,12 +19,18 @@ Microsoft deprecated the Teams **local API**, which broke the classic integratio
 
 | Feature | What it does |
 |---|---|
-| 🔄 **Signed auto-updater** | On startup the app checks GitHub for a newer **signed** release and can download, install and relaunch itself (Tauri updater + minisign signature verification). Live since **v1.3.7**. |
+| 🔄 **Signed auto-updater** | In-app **Updates card** (version, status, progress bar, release-notes button); checks GitHub on startup and hourly, verifies the minisign signature and installs + relaunches on your confirmation. Live since **v1.3.7**. |
 | 🏠 **Home-network gating** | Only connects to MQTT when you're on your home network, matched on the **default-gateway MAC** (Settings → Home Detection → *Use Current Network*). Leave empty to always connect. |
 | 🟢 **Availability / LWT** | Every entity has an `availability_topic` with a retained **Last Will**. When the app is closed, asleep, crashed or away, its entities go `unavailable` in HA — this is the structural fix for a "sticky" `is_in_meeting`. |
+| 🎙️ **System mic-mute switch** | `micsystemmuted` mutes the default communications microphone at the Windows level — the one switch that is **genuinely controllable** from HA (the Teams-session toggles died with the retired local API). |
+| 🔒 **Session Locked sensor** | Windows lock/unlock as a binary sensor — an at-desk signal for automations. |
+| 💬 **Toasts from HA** | A `notify` entity per machine: `notify.send_message` pops a Windows toast (plain text or JSON `{title, message}`) — reaches you even in headphone meetings. |
+| 🔴 **Tray status dot** | Tray icon shows red while in a meeting, orange while muted, with a matching tooltip. |
+| 🔐 **Hardened & honest** | MQTT password DPAPI-encrypted at rest; TLS never silently downgrades; CSP on the window; truthful entity types (state-only signals are binary sensors, not fake switches, since **v1.4.0**). |
+| 🖥️ **UI niceties** | Sensor strip (mic/camera/system-mic/Teams pills), System/Light/Dark theme following Windows live, settings auto-save, version in the window title. |
 | 🧾 **Device `sw_version`** | The installed version is reported in the MQTT discovery device block. |
 | 🗕 **Close-to-tray** | The window close button hides to the tray instead of quitting (keeping the MQTT bridge alive). |
-| 💤 **Modern Standby resume** | Reconnects and republishes state after sleep/standby. |
+| 💤 **Modern Standby resume** | Reconnects and republishes state after sleep/standby (clock-gap detection — Windows gives suspended desktop apps no reliable resume event). |
 
 ## Installation
 
