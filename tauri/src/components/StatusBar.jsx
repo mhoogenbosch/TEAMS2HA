@@ -1,6 +1,8 @@
+// Header bar: the technical preconditions only (is the pipeline able to work at all?).
+// MQTT = can we publish; Teams running = is there anything to observe. The observed
+// Teams signals themselves (meeting, presence, mic, camera) live in the SensorStrip.
 export default function StatusBar({ mqttStatus, meetingState }) {
   const connected = mqttStatus === "Connected";
-  const presence = meetingState?.presence || "";
 
   return (
     <div className="status-bar">
@@ -9,17 +11,11 @@ export default function StatusBar({ mqttStatus, meetingState }) {
         <span className="status-label">MQTT: {mqttStatus}</span>
       </div>
       {meetingState && (
-        <div className={`status-indicator ${meetingState.isInMeeting ? "in-meeting" : ""}`}>
+        <div className={`status-indicator ${meetingState.teamsRunning ? "connected" : "disconnected"}`}>
           <span className="status-dot" />
           <span className="status-label">
-            {meetingState.isInMeeting ? "In Meeting" : "Not in Meeting"}
+            Teams: {meetingState.teamsRunning ? "Running" : "Not running"}
           </span>
-        </div>
-      )}
-      {presence && (
-        <div className={`status-indicator presence-${presence.toLowerCase()}`}>
-          <span className="status-dot" />
-          <span className="status-label">{presence}</span>
         </div>
       )}
     </div>
