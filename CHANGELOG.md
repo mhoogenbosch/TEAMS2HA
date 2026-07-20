@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.4.1] — 2026-07-20
+### Changed
+- **The header bar now shows only the technical preconditions; the observed Teams signals moved to the sensor strip.** Header: `MQTT: <status>` and `Teams: Running / Not running` (red when Teams is down — without it there is nothing to observe). Sensor strip: new `Meeting` and `Status` (presence) pills joined Mic / Camera / Mic (system). The presence pill is coloured after the Teams bullets: green Available, red Busy/DoNotDisturb, orange Away/BeRightBack.
+
 ## [v1.4.0] — 2026-07-19
 ### Breaking
 - **`ismuted` and `isvideoon` are now binary sensors instead of switches.** Their command path died when Microsoft retired the Teams local API — in HA the toggles silently bounced back without doing anything. The old retained switch discovery configs and states are cleaned up automatically on the first connect, which removes the old `switch.…` entities from Home Assistant. **Action required:** update automations/dashboards that referenced `switch.…_is_muted` / `switch.…_is_video_on` to the new `binary_sensor` entities. The system-mic switch (`micsystemmuted`) is unaffected and remains genuinely controllable.
