@@ -9,9 +9,12 @@ mod process_watcher;
 mod registry_monitor;
 mod session_monitor;
 mod settings;
+mod teams_proc;
+mod uia_monitor;
 mod wasapi_monitor;
 
-use app_state::{new_shared, SharedState};
+use app_state::{new_shared, AppState, SharedState};
+use uia_monitor::UiaEvent;
 use home_network::HomeEvent;
 use log_watcher::LogEvent;
 use mic_control::MicEvent;
@@ -25,7 +28,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State,
+    AppHandle, Emitter, Manager, State, WindowEvent,
 };
 use tokio::sync::{mpsc, watch, RwLock};
 use wasapi_monitor::WasapiEvent;
@@ -287,12 +290,14 @@ pub fn run() {
             let (proc_tx, mut proc_rx) = mpsc::channel::<ProcessEvent>(64);
             let (mic_tx, mut mic_rx) = mpsc::channel::<MicEvent>(16);
             let (session_tx, mut session_rx) = mpsc::channel::<SessionEvent>(16);
+            let (uia_tx, mut uia_rx) = mpsc::channel::<UiaEvent>(16);
 
             // Start OS monitors
             log_watcher::start(log_tx);
             wasapi_monitor::start(wasapi_tx);
             mic_control::start(mic_tx);
             session_monitor::start(session_tx);
+            uia_monitor::start(uia_tx);
             tauri::async_runtime::spawn(async move { registry_monitor::start(reg_tx).await });
             tauri::async_runtime::spawn(async move { process_watcher::start(proc_tx).await });
 
@@ -332,6 +337,9 @@ pub fn run() {
                         }
                         Some(ev) = wasapi_rx.recv() => {
                             handle_wasapi_event(ev, &shared2, &mqtt_h3, &handle3).await;
+                        }
+                        Some(ev) = uia_rx.recv() => {
+                            handle_uia_event(ev, &shared2, &mqtt_h3, &handle3).await;
                         }
                         Some(ev) = reg_rx.recv() => {
                             handle_registry_event(ev, &shared2, &mqtt_h3, &handle3).await;
@@ -611,6 +619,8 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
             s.log_watcher_in_call = active;
             if active {
                 s.meeting.is_in_meeting = true;
+                // Adopt mute readings taken before the meeting was recognised.
+                recompute_muted(&mut s);
             } else {
                 // Presence must NOT gate call-end (see handle_registry_event):
                 // Teams holds presence at "Busy" during/after calls.
@@ -624,6 +634,38 @@ async fn handle_log_event(ev: LogEvent, shared: &SharedState, mqtt: &MqttHandle,
     publish(mqtt, app, shared, false).await;
 }
 
+/// Combine the two mute sources into `meeting.is_muted`.
+///
+/// They observe different things and both silence the microphone, so either one being
+/// set means muted:
+/// * `uia_muted` — Teams' own mute button. The only source for it (see uia_monitor).
+///   `None` = no reading available, which must not be read as "unmuted".
+/// * `last_wasapi_muted` — the OS-level per-app mute, i.e. muting Teams from the Windows
+///   control panel or volume mixer. Teams' own button does not move this.
+fn recompute_muted(s: &mut AppState) {
+    let uia = s.uia_muted.unwrap_or(false);
+    let wasapi = s.last_wasapi_muted.unwrap_or(false);
+    s.meeting.is_muted = uia || wasapi;
+}
+
+async fn handle_uia_event(
+    ev: UiaEvent,
+    shared: &SharedState,
+    mqtt: &MqttHandle,
+    app: &AppHandle,
+) {
+    let mut s = shared.write().await;
+    s.uia_muted = match ev {
+        UiaEvent::MuteChanged(m) => Some(m),
+        UiaEvent::Unknown => None,
+    };
+    if s.meeting.is_in_meeting {
+        recompute_muted(&mut s);
+    }
+    drop(s);
+    publish(mqtt, app, shared, false).await;
+}
+
 async fn handle_wasapi_event(
     ev: WasapiEvent,
     shared: &SharedState,
@@ -632,8 +674,10 @@ async fn handle_wasapi_event(
 ) {
     let WasapiEvent::MuteChanged(muted) = ev;
     let mut s = shared.write().await;
+    // Always record it, even outside a meeting — see AppState::last_wasapi_muted.
+    s.last_wasapi_muted = Some(muted);
     if s.meeting.is_in_meeting {
-        s.meeting.is_muted = muted;
+        recompute_muted(&mut s);
     }
     drop(s);
     publish(mqtt, app, shared, false).await;
@@ -651,6 +695,9 @@ async fn handle_registry_event(
         RegistryEvent::MicChanged(active) => {
             if active && !s.meeting.is_in_meeting {
                 s.meeting.is_in_meeting = true;
+                // Monitors typically have a reading before the mic key flips, so adopt
+                // it rather than starting from a default.
+                recompute_muted(&mut s);
             } else if !active && !s.log_watcher_in_call {
                 // Mic released and the log watcher isn't holding a call open →
                 // the call has ended. Presence must NOT gate this: Teams keeps
