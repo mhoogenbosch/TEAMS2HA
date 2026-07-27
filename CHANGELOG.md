@@ -3,7 +3,7 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
-## [Unreleased] — v1.4.2 (upstream v1.3.4 sync)
+## [v1.4.2] — 2026-07-27 (upstream v1.3.4 sync)
 Port of everything worthwhile from upstream v1.3.4 + master (jimmyeao). Upstream's release largely consists of
 this fork's own PRs (#95–#99); the commits below are the genuinely new parts, cherry-picked with attribution.
 ### Fixed
