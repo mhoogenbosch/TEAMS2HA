@@ -13,9 +13,10 @@ pub struct Settings {
     pub mqtt_password: String,
     pub sensor_prefix: String,
     pub use_tls: bool,
-    /// Legacy flag: certificate verification can no longer be disabled (the old
-    /// implementation silently downgraded TLS to plain TCP). Kept for settings-file
-    /// compatibility; no longer shown in the UI.
+    /// Accept self-signed/mismatched broker certificates *within* TLS (permissive
+    /// native-tls connector, ported from upstream 2a20369). The connection never
+    /// downgrades to plaintext — the pre-v1.3.8 implementation did exactly that,
+    /// which is why this flag was a neutered no-op between v1.3.8 and v1.4.2.
     #[serde(default)]
     pub ignore_cert_errors: bool,
     pub use_websockets: bool,
