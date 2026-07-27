@@ -3,6 +3,33 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [Unreleased] — v1.4.2 (upstream v1.3.4 sync)
+Port of everything worthwhile from upstream v1.3.4 + master (jimmyeao). Upstream's release largely consists of
+this fork's own PRs (#95–#99); the commits below are the genuinely new parts, cherry-picked with attribution.
+### Fixed
+- **Teams mute detection works again** (upstream `072fa14` + `758ecc9`). Fork v1.3.8's "no reading is not the
+  same as muted" fix accidentally removed the only working mute signal: Teams' in-app mute is not observable as
+  an audio flag — Teams *releasing its capture session* is precisely how mute is detected, so that inference is
+  load-bearing and has been restored. On top of that, mute is now also read directly from the Teams window via
+  **UI Automation** (`uia_monitor.rs`); the two sources are combined such that a merely-missing capture session
+  can no longer override an explicit UIA reading. The fork's PID→process-name cache (perf fix from the v1.4.0
+  review) moved to the shared `teams_proc` module so both monitors benefit.
+- **Home detection now survives VPNs and docks** (upstream `ce7fa2e`). All `0.0.0.0/0` default-route gateways are
+  enumerated instead of resolving the best route to a public IP — a Tailscale exit node or VPN installs `/1`
+  split routes that hijacked "best route" and broke home detection on multi-homed machines.
+### Changed
+- **"Ignore Cert Errors" is back — and this time it actually works** (upstream `2a20369` + fork UI restore).
+  The backend builds a permissive native-tls connector: self-signed/mismatched broker certificates are accepted
+  *within* an encrypted TLS connection, which never downgrades to plaintext. The toggle reappears in the UI,
+  only while TLS is enabled. (v1.4.0 had removed the toggle because the flag was a no-op at the time.)
+- **The app finally shows the real Teams2HA icon** (upstream `3613b91`) — window, tray and executable carried
+  the stock Tauri template icon since the Tauri port.
+- Dependency locks synced with upstream: tokio 1.53, serde 1.0.229, serde_json 1.0.151, anyhow 1.0.104, vite 8.1.5.
+### Not ported (deliberate)
+- Upstream's window-layout rework and min-size (fork has its own v1.4.1 UI), the restored stock updater
+  (fork has its own Updates card), the "unread messages" latch fix (fork removed that sensor entirely) and
+  upstream's DPAPI implementation (fork shipped its own in v1.4.0).
+
 ## [v1.4.1] — 2026-07-20
 ### Changed
 - **The header bar now shows only the technical preconditions; the observed Teams signals moved to the sensor strip.** Header: `MQTT: <status>` and `Teams: Running / Not running` (red when Teams is down — without it there is nothing to observe). Sensor strip: new `Meeting` and `Status` (presence) pills joined Mic / Camera / Mic (system). The presence pill is coloured after the Teams bullets: green Available, red Busy/DoNotDisturb, orange Away/BeRightBack.

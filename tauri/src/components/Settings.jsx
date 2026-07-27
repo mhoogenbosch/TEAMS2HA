@@ -137,14 +137,21 @@ export default function Settings() {
         </div>
 
         <div className="chip-row">
-          {/* "Ignore Cert Errors" is gone on purpose: the backend never supported
-              it safely (it used to downgrade TLS to plain TCP) and ignores the
-              flag — a visible toggle that does nothing only misleads. */}
           <Chip
             label="TLS"
             checked={settings.useTls}
             onChange={(v) => set("useTls", v)}
           />
+          {/* Only meaningful with TLS: accepts self-signed/mismatched broker certs
+              *within* an encrypted connection — the connection never downgrades
+              to plaintext (backend support restored from upstream 2a20369). */}
+          {settings.useTls && (
+            <Chip
+              label="Ignore Cert Errors"
+              checked={settings.ignoreCertErrors}
+              onChange={(v) => set("ignoreCertErrors", v)}
+            />
+          )}
           <Chip
             label="WebSockets"
             checked={settings.useWebsockets}

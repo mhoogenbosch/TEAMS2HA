@@ -1,12 +1,24 @@
-/// Polls WASAPI capture sessions every 250 ms to detect Teams mute state.
-/// Teams signals mute via the Windows-level mute flag on its capture session,
-/// which is the same signal that drives the hardware mute LED on the mic.
+//! Polls WASAPI capture sessions every 250 ms.
+//!
+//! This is **not** the primary mute source — Teams' own mute button is invisible here;
+//! `uia_monitor` reads that. What this catches is the *OS-level* mute: muting Teams from
+//! the Windows volume mixer or Sound settings, which UI Automation cannot see.
+
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasapiEvent {
+    /// A Teams capture session exists and reported this mute state.
     MuteChanged(bool),
+    /// Teams has no capture session at all.
+    ///
+    /// Reported as its own event rather than as "muted". On older Teams builds this was
+    /// *the* mute signal — Teams released its capture session when muted — but it is an
+    /// inference, not a reading, so `recompute_muted` in lib.rs uses it only as a
+    /// fallback when UI Automation has no reading. Treating it as authoritative would
+    /// let a stale "no session" override a perfectly good UIA reading of "not muted".
+    NoSession,
 }
 
 pub fn start(tx: mpsc::Sender<WasapiEvent>) {
@@ -35,36 +47,78 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
                 }
             };
 
-        let mut last_muted: Option<bool> = None;
-        // PID→is-Teams lookups (OpenProcess + QueryFullProcessImageNameW) are the
-        // expensive part of this 4 Hz loop, and a live PID's image name never
-        // changes. Cache per PID; flush periodically to cope with PID reuse.
-        let mut pid_is_teams: std::collections::HashMap<u32, bool> =
-            std::collections::HashMap::new();
-        let mut cache_born = std::time::Instant::now();
+        // Some(Some(flag)) = a session exists and reported that flag
+        // Some(None)       = no Teams capture session
+        // None             = nothing reported yet
+        let mut last_sent: Option<Option<bool>> = None;
+        // Error state is logged on transition only — at 4 polls/sec, logging every
+        // failure would flood the file, but silence made "unchanged" and "could not
+        // read" indistinguishable when diagnosing mute detection.
+        let mut in_error = false;
 
         loop {
             std::thread::sleep(Duration::from_millis(250));
 
-            if cache_born.elapsed() > Duration::from_secs(60) {
-                pid_is_teams.clear();
-                cache_born = std::time::Instant::now();
+            let reading = check_teams_mute(&enumerator);
+            match (&reading, in_error) {
+                (Err(()), false) => {
+                    log::warn!("WasapiMonitor: audio API read failing - holding last state");
+                    in_error = true;
+                }
+                (Ok(_), true) => {
+                    log::info!("WasapiMonitor: audio API readable again");
+                    in_error = false;
+                }
+                _ => {}
             }
 
-            match check_teams_mute(&enumerator, &mut pid_is_teams) {
-                // COM hiccup: no usable reading — keep the last known state
-                // instead of inventing a mute flank mid-call.
-                Err(()) => {}
-                // No Teams capture session (e.g. between calls): clear the cache
-                // so the first reading of the next call always produces an event,
-                // even when its mute state equals how the previous call ended
-                // (is_muted gets reset on meeting end elsewhere).
-                Ok(None) => last_muted = None,
-                Ok(Some(muted)) => {
-                    if Some(muted) != last_muted {
-                        last_muted = Some(muted);
-                        log::info!("WasapiMonitor: mute → {muted}");
-                        let _ = tx.blocking_send(WasapiEvent::MuteChanged(muted));
+            // ┌───────────────────┬──────────────────────────────────────────────────┐
+            // │ Err(())           │ the audio API failed: no measurement at all, so  │
+            // │                   │ hold the last state rather than inventing a mute │
+            // │                   │ flank mid-call.                                  │
+            // │ Ok(None)          │ no Teams capture session → report NoSession.     │
+            // │ Ok(Some(reading)) │ a session exists → report its mute flags.         │
+            // └───────────────────┴──────────────────────────────────────────────────┘
+            //
+            // History, because this arm has been got wrong twice:
+            //
+            // Teams' own mute button is invisible here — verified 2026-07-26 across
+            // several real calls that the per-session mute (ISimpleAudioVolume) and
+            // the capture endpoint mute (IAudioEndpointVolume) both stay false through
+            // mute toggles. On older builds Teams *released* its capture session when
+            // muted, so `Ok(None)` was the mute signal, and commit e5c28ed broke mute
+            // entirely by reclassifying it as "no reading, hold last state".
+            //
+            // Current Teams keeps the session open while muted, so that inference no
+            // longer fires anyway, and uia_monitor is the real source. `Ok(None)` is
+            // therefore reported as its own event and left for lib.rs to weigh: still
+            // usable as a fallback when UIA has no reading, but never allowed to
+            // override one. Reporting it as "muted" here would mean a Teams that is
+            // merely idle could mark you muted the moment a meeting is detected.
+            let current: Option<Option<bool>> = match &reading {
+                Err(()) => None,
+                Ok(None) => Some(None),
+                Ok(Some(r)) => Some(Some(r.muted())),
+            };
+
+            if let Some(state) = current {
+                if last_sent != Some(state) {
+                    last_sent = Some(state);
+                    match (state, &reading) {
+                        // Both flag components are logged: if Teams ever does start
+                        // reflecting mute in one of them, this is where it will show.
+                        (Some(m), Ok(Some(r))) => {
+                            log::info!("WasapiMonitor: session mute → {m} ({r})");
+                            let _ = tx.blocking_send(WasapiEvent::MuteChanged(m));
+                        }
+                        (Some(m), _) => {
+                            log::info!("WasapiMonitor: session mute → {m}");
+                            let _ = tx.blocking_send(WasapiEvent::MuteChanged(m));
+                        }
+                        (None, _) => {
+                            log::info!("WasapiMonitor: no Teams capture session");
+                            let _ = tx.blocking_send(WasapiEvent::NoSession);
+                        }
                     }
                 }
             }
@@ -72,16 +126,51 @@ fn poll_wasapi_blocking(tx: mpsc::Sender<WasapiEvent>) {
     }
 }
 
-/// Ok(Some(muted)) when a Teams capture session was measured, Ok(None) when no
-/// Teams session exists, Err(()) when the audio API failed. Previously all of
-/// these were reported as "muted", so a transient COM hiccup mid-call produced
-/// a false mute flank.
+/// The two independent mute flags that can hide a microphone, read together because
+/// they mean different things:
+///
+/// * `session` — `ISimpleAudioVolume` on Teams' own capture session. This is the
+///   per-app slider in the Windows volume mixer. Teams' in-app mute button does **not**
+///   touch it; verified during a real call on 2026-07-26 where it stayed `false`
+///   across several mute toggles.
+/// * `endpoint` — `IAudioEndpointVolume` on the capture *device*. This is what the
+///   Windows 11 mic-mute control drives, and Teams keeps it in sync via the VoIP call
+///   coordinator (see `HfpVoipCallCoordinatorProvider` in the Teams logs).
+///
+/// Either being set means the far end hears nothing, so the reported state is the OR.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy)]
+pub struct MuteReading {
+    pub session: bool,
+    pub endpoint: bool,
+}
+
+#[cfg(windows)]
+impl MuteReading {
+    fn muted(&self) -> bool {
+        self.session || self.endpoint
+    }
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for MuteReading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "session={} endpoint={}", self.session, self.endpoint)
+    }
+}
+
+/// Ok(Some(reading)) when a Teams capture session was measured, Ok(None) when no
+/// Teams session exists, Err(()) when the audio API failed.
+///
+/// Note the caller treats `Ok(None)` as **muted**, not as missing data — Teams
+/// releasing its capture session is the mute signal. See the table in the poll loop
+/// before changing this contract.
 #[cfg(windows)]
 unsafe fn check_teams_mute(
     enumerator: &windows::Win32::Media::Audio::IMMDeviceEnumerator,
-    pid_is_teams: &mut std::collections::HashMap<u32, bool>,
-) -> Result<Option<bool>, ()> {
+) -> Result<Option<MuteReading>, ()> {
     use windows::core::Interface;
+    use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
     use windows::Win32::Media::Audio::{
         eCapture, IAudioSessionControl2, IAudioSessionManager2, ISimpleAudioVolume,
         DEVICE_STATE_ACTIVE,
@@ -94,7 +183,8 @@ unsafe fn check_teams_mute(
     let count = collection.GetCount().map_err(|_| ())?;
 
     let mut teams_found = false;
-    let mut teams_hw_muted = false;
+    let mut session_muted = false;
+    let mut endpoint_muted = false;
 
     for i in 0..count {
         let device = match collection.Item(i) {
@@ -112,12 +202,15 @@ unsafe fn check_teams_mute(
             Err(_) => continue,
         };
 
-        let count = match session_enum.GetCount() {
+        // Deliberately not `count` — that would shadow the device count above.
+        let session_count = match session_enum.GetCount() {
             Ok(c) => c,
             Err(_) => continue,
         };
 
-        for j in 0..count {
+        let mut device_hosts_teams = false;
+
+        for j in 0..session_count {
             let ctrl = match session_enum.GetSession(j) {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -133,11 +226,12 @@ unsafe fn check_teams_mute(
                 Err(_) => continue,
             };
 
-            if !*pid_is_teams.entry(pid).or_insert_with(|| is_teams_pid(pid)) {
+            if !crate::teams_proc::is_teams_pid(pid) {
                 continue;
             }
 
             teams_found = true;
+            device_hosts_teams = true;
 
             let vol: ISimpleAudioVolume = match ctrl.cast() {
                 Ok(v) => v,
@@ -146,55 +240,35 @@ unsafe fn check_teams_mute(
 
             if let Ok(mute) = vol.GetMute() {
                 if mute.as_bool() {
-                    teams_hw_muted = true;
+                    session_muted = true;
+                }
+            }
+        }
+
+        // Only consult the endpoint of a device Teams is actually capturing from —
+        // an unrelated muted mic (a webcam's, say) must not read as "Teams is muted".
+        if device_hosts_teams {
+            if let Ok(endpoint) = device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) {
+                if let Ok(mute) = endpoint.GetMute() {
+                    if mute.as_bool() {
+                        endpoint_muted = true;
+                    }
                 }
             }
         }
     }
 
     if teams_found {
-        Ok(Some(teams_hw_muted))
+        Ok(Some(MuteReading {
+            session: session_muted,
+            endpoint: endpoint_muted,
+        }))
     } else {
         Ok(None)
     }
 }
 
-#[cfg(windows)]
-fn is_teams_pid(pid: u32) -> bool {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-            Ok(h) => h,
-            Err(_) => return false,
-        };
-
-        let mut buf = vec![0u16; 260];
-        let mut size = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_WIN32,
-            windows::core::PWSTR(buf.as_mut_ptr()),
-            &mut size,
-        );
-        let _ = CloseHandle(handle);
-
-        if ok.is_err() {
-            return false;
-        }
-
-        let name = OsString::from_wide(&buf[..size as usize])
-            .to_string_lossy()
-            .to_lowercase();
-        name.contains("ms-teams") || name.contains("msteams")
-    }
-}
+// is_teams_pid moved to crate::teams_proc — uia_monitor needs it too.
 
 #[cfg(not(windows))]
 fn poll_wasapi_blocking(_tx: mpsc::Sender<WasapiEvent>) {

@@ -26,11 +26,13 @@ Microsoft deprecated the Teams **local API**, which broke the classic integratio
 | 🔒 **Session Locked sensor** | Windows lock/unlock as a binary sensor — an at-desk signal for automations. |
 | 💬 **Toasts from HA** | A `notify` entity per machine: `notify.send_message` pops a Windows toast (plain text or JSON `{title, message}`) — reaches you even in headphone meetings. |
 | 🔴 **Tray status dot** | Tray icon shows red while in a meeting, orange while muted, with a matching tooltip. |
-| 🔐 **Hardened & honest** | MQTT password DPAPI-encrypted at rest; TLS never silently downgrades; CSP on the window; truthful entity types (state-only signals are binary sensors, not fake switches, since **v1.4.0**). |
+| 🔐 **Hardened & honest** | MQTT password DPAPI-encrypted at rest; TLS never silently downgrades (self-signed brokers supported via *Ignore Cert Errors* — encrypted, unverified, since v1.4.2); CSP on the window; truthful entity types (state-only signals are binary sensors, not fake switches, since **v1.4.0**). |
 | 🖥️ **UI niceties** | Sensor strip (mic/camera/system-mic/Teams pills), System/Light/Dark theme following Windows live, settings auto-save, version in the window title. |
 | 🧾 **Device `sw_version`** | The installed version is reported in the MQTT discovery device block. |
 | 🗕 **Close-to-tray** | The window close button hides to the tray instead of quitting (keeping the MQTT bridge alive). |
 | 💤 **Modern Standby resume** | Reconnects and republishes state after sleep/standby (clock-gap detection — Windows gives suspended desktop apps no reliable resume event). |
+| 🪟 **UIA mute detection** | Since **v1.4.2**: mute is also read straight from the Teams window via UI Automation, combined with the capture-session signal (synced from upstream v1.3.4). |
+| 🛰️ **VPN/dock-proof home detection** | Since **v1.4.2**: all default-route gateways are checked, so Tailscale exit nodes or docking no longer break home detection (synced from upstream). |
 
 ## Installation
 
