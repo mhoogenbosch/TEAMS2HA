@@ -154,6 +154,8 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.4.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.2
+[v1.4.1]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.1
 [v1.4.0]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.0
 [v1.3.14]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.14
 [v1.3.13]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.3.13
