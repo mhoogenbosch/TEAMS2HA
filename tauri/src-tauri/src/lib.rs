@@ -28,7 +28,7 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, State,
 };
 use tokio::sync::{mpsc, watch, RwLock};
 use wasapi_monitor::WasapiEvent;
@@ -666,58 +666,6 @@ fn recompute_muted(s: &mut AppState) {
     };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::recompute_muted;
-    use crate::app_state::AppState;
-
-    fn state(uia: Option<bool>, wasapi: Option<bool>) -> AppState {
-        AppState {
-            uia_muted: uia,
-            last_wasapi_muted: wasapi,
-            ..Default::default()
-        }
-    }
-
-    fn muted(uia: Option<bool>, wasapi: Option<bool>) -> bool {
-        let mut s = state(uia, wasapi);
-        recompute_muted(&mut s);
-        s.meeting.is_muted
-    }
-
-    #[test]
-    fn uia_wins_over_a_missing_capture_session() {
-        // The regression this guards against: Teams sitting idle has no capture
-        // session, and treating that as "muted" would override UIA reporting the
-        // mute button as live the moment a meeting was detected.
-        assert!(!muted(Some(false), None));
-    }
-
-    #[test]
-    fn either_source_reporting_muted_means_muted() {
-        assert!(muted(Some(true), Some(false)));
-        assert!(muted(Some(false), Some(true)));
-        assert!(muted(Some(true), Some(true)));
-    }
-
-    #[test]
-    fn both_sources_live_is_not_muted() {
-        assert!(!muted(Some(false), Some(false)));
-    }
-
-    #[test]
-    fn falls_back_to_the_session_flag_when_uia_has_no_reading() {
-        assert!(muted(None, Some(true)));
-        assert!(!muted(None, Some(false)));
-    }
-
-    #[test]
-    fn no_window_and_no_session_reads_as_muted() {
-        // Nothing to go on: no window to read and Teams is not capturing, so during
-        // a meeting the mic is not live. The legacy inference, confined to this case.
-        assert!(muted(None, None));
-    }
-}
 
 async fn handle_uia_event(
     ev: UiaEvent,
@@ -797,4 +745,57 @@ async fn handle_process_event(
     s.meeting.teams_running = running;
     drop(s);
     publish(mqtt, app, shared, false).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recompute_muted;
+    use crate::app_state::AppState;
+
+    fn state(uia: Option<bool>, wasapi: Option<bool>) -> AppState {
+        AppState {
+            uia_muted: uia,
+            last_wasapi_muted: wasapi,
+            ..Default::default()
+        }
+    }
+
+    fn muted(uia: Option<bool>, wasapi: Option<bool>) -> bool {
+        let mut s = state(uia, wasapi);
+        recompute_muted(&mut s);
+        s.meeting.is_muted
+    }
+
+    #[test]
+    fn uia_wins_over_a_missing_capture_session() {
+        // The regression this guards against: Teams sitting idle has no capture
+        // session, and treating that as "muted" would override UIA reporting the
+        // mute button as live the moment a meeting was detected.
+        assert!(!muted(Some(false), None));
+    }
+
+    #[test]
+    fn either_source_reporting_muted_means_muted() {
+        assert!(muted(Some(true), Some(false)));
+        assert!(muted(Some(false), Some(true)));
+        assert!(muted(Some(true), Some(true)));
+    }
+
+    #[test]
+    fn both_sources_live_is_not_muted() {
+        assert!(!muted(Some(false), Some(false)));
+    }
+
+    #[test]
+    fn falls_back_to_the_session_flag_when_uia_has_no_reading() {
+        assert!(muted(None, Some(true)));
+        assert!(!muted(None, Some(false)));
+    }
+
+    #[test]
+    fn no_window_and_no_session_reads_as_muted() {
+        // Nothing to go on: no window to read and Teams is not capturing, so during
+        // a meeting the mic is not live. The legacy inference, confined to this case.
+        assert!(muted(None, None));
+    }
 }
