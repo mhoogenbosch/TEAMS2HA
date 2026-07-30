@@ -3,6 +3,21 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.4.3] — 2026-07-30 (concurrent-call tracking)
+### Fixed
+- **A declined incoming call no longer ends the running meeting.** Teams runs calls concurrently: when someone
+  calls you during a meeting, that ring is a second call, and declining (or missing) it writes `NotifyCallEnded`
+  to the Teams log — which the log watcher treated as "the meeting is over", flipping `is_in_meeting` off and
+  (via HA automations) restoring speaker volume mid-meeting. The watcher now tracks **call ids**: only a call
+  that was actually seen active can end the call state, and only when the *last* active call is gone. Ends of
+  never-active calls (declined/missed rings) and Teams' duplicate end-lines per call are ignored. If Teams'
+  log format ever drops the ids, the watcher falls back to the old any-end-closes-the-call behaviour and
+  logs a warning (EN: incident 2026-07-30 / NL: een geweigerde inkomende oproep tijdens een vergadering
+  zette het volume niet meer terug — nu opgelost met callId-tracking).
+- **Teams exiting mid-call clears the call state.** A crash or quit never writes end-lines for running calls;
+  a stale call id would have pinned `is_in_meeting` on forever. The log watcher now watches the Teams process
+  state and drops all tracked calls (publishing meeting-off) when Teams stops.
+
 ## [v1.4.2] — 2026-07-27 (upstream v1.3.4 sync)
 Port of everything worthwhile from upstream v1.3.4 + master (jimmyeao). Upstream's release largely consists of
 this fork's own PRs (#95–#99); the commits below are the genuinely new parts, cherry-picked with attribution.
@@ -154,6 +169,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.4.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.3
 [v1.4.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.2
 [v1.4.1]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.1
 [v1.4.0]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.0
