@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::interval;
 
 #[derive(Debug, Clone)]
@@ -15,8 +16,112 @@ pub enum LogEvent {
     PresenceChanged(String),
 }
 
-pub fn start(tx: mpsc::Sender<LogEvent>) {
-    tauri::async_runtime::spawn(poll_loop(tx));
+/// Call-lifecycle bookkeeping keyed on Teams' own call ids.
+///
+/// Teams runs calls concurrently: an incoming call that rings during a meeting
+/// is a second call, and declining (or missing) it logs `reportIncomingCall` +
+/// `NotifyCallEnded` for that id — without ever logging `NotifyCallActive`.
+/// The old boolean treated *any* end-line as "the meeting is over", so a
+/// declined call ended the running meeting in HA (incident 2026-07-30).
+/// Only ids that were seen active may close the call state, and only when the
+/// last one is gone.
+#[derive(Default)]
+struct CallState {
+    /// Ids seen in a `NotifyCallActive` line.
+    active: HashSet<String>,
+    /// A `NotifyCallActive` line carried no parseable id (format drift):
+    /// fall back to the pre-id semantics where any end-line closes the call.
+    legacy: bool,
+}
+
+impl CallState {
+    fn in_call(&self) -> bool {
+        self.legacy || !self.active.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.active.clear();
+        self.legacy = false;
+    }
+
+    /// Feed one log line through the call state machine. Returns the new
+    /// in-call value when the line *transitions* it, None otherwise (either
+    /// not a call line, or a call line that doesn't change the outcome).
+    fn apply(&mut self, line: &str) -> Option<bool> {
+        let was = self.in_call();
+        if line.contains("NotifyCallActive") || line.contains("reportCallActive") {
+            match extract_call_id(line) {
+                Some(id) => {
+                    log::info!("LogWatcher: call active ({id})");
+                    self.active.insert(id);
+                }
+                None => {
+                    log::warn!("LogWatcher: call active without parseable id — legacy mode");
+                    self.legacy = true;
+                }
+            }
+        } else if line.contains("CallEnded") || line.contains("NotifyCallEnded") {
+            match extract_call_id(line) {
+                Some(id) => {
+                    if self.active.remove(&id) {
+                        log::info!("LogWatcher: call ended ({id})");
+                    } else if self.active.is_empty() && self.legacy {
+                        // An id-less active call is closed by whichever
+                        // end-line arrives first.
+                        log::info!("LogWatcher: call ended (legacy, {id})");
+                        self.legacy = false;
+                    } else {
+                        // End of a call that never went active here: a
+                        // declined/missed incoming call, or one of the
+                        // duplicate end-lines Teams writes per call. Must
+                        // not touch the running meeting.
+                        log::debug!("LogWatcher: ignoring end of inactive call {id}");
+                    }
+                }
+                None => {
+                    if self.active.is_empty() {
+                        if self.legacy {
+                            log::info!("LogWatcher: call ended (no id)");
+                        }
+                        self.legacy = false;
+                    } else {
+                        // We are tracking id'd calls; an end-line without an
+                        // id is log noise, not one of ours.
+                        log::debug!("LogWatcher: ignoring id-less end-line");
+                    }
+                }
+            }
+        } else {
+            return None;
+        }
+        let now = self.in_call();
+        (now != was).then_some(now)
+    }
+}
+
+/// Pull the 36-char GUID following a `callId: ` (HfpVoipCallCoordinatorImpl
+/// lines) or `fired: ` (TeamsCallTracker lines) marker. The GUID is often
+/// glued straight onto the next field (`…fa77causeId: …`), so take exactly
+/// the GUID shape rather than splitting on whitespace. None on format drift —
+/// callers then fall back to the legacy any-end-closes-the-call semantics.
+fn extract_call_id(line: &str) -> Option<String> {
+    let start = ["callId: ", "fired: "]
+        .iter()
+        .find_map(|m| line.find(m).map(|i| i + m.len()))?;
+    let id: String = line.get(start..)?.chars().take(36).collect();
+    is_guid(&id).then_some(id)
+}
+
+fn is_guid(id: &str) -> bool {
+    id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+pub fn start(tx: mpsc::Sender<LogEvent>, teams_running: watch::Receiver<bool>) {
+    tauri::async_runtime::spawn(poll_loop(tx, teams_running));
 }
 
 /// How often to rescan the log directory for a rotated/newer file. The 250 ms
@@ -25,10 +130,10 @@ pub fn start(tx: mpsc::Sender<LogEvent>) {
 /// app, and rotation being noticed a few seconds late is harmless.
 const LOG_RESCAN: Duration = Duration::from_secs(5);
 
-async fn poll_loop(tx: mpsc::Sender<LogEvent>) {
+async fn poll_loop(tx: mpsc::Sender<LogEvent>, mut teams_running: watch::Receiver<bool>) {
     let mut current_file: Option<PathBuf> = None;
     let mut file_handle: Option<(BufReader<File>, u64)> = None;
-    let mut in_call = false;
+    let mut calls = CallState::default();
 
     let mut tick = interval(Duration::from_millis(250));
     let mut latest_cached: Option<PathBuf> = None;
@@ -36,6 +141,20 @@ async fn poll_loop(tx: mpsc::Sender<LogEvent>) {
 
     loop {
         tick.tick().await;
+
+        // A Teams exit (crash or quit) never writes end-lines for calls that
+        // were still running — drop them, or a stale id would keep the call
+        // set non-empty forever and pin is_in_meeting on.
+        if teams_running.has_changed().unwrap_or(false)
+            && !*teams_running.borrow_and_update()
+        {
+            let was = calls.in_call();
+            calls.clear();
+            if was {
+                log::info!("LogWatcher: Teams stopped — clearing active call state");
+                let _ = tx.send(LogEvent::MeetingChanged(false)).await;
+            }
+        }
 
         if tokio::time::Instant::now() >= next_scan {
             next_scan = tokio::time::Instant::now() + LOG_RESCAN;
@@ -76,7 +195,7 @@ async fn poll_loop(tx: mpsc::Sender<LogEvent>) {
                 match reader.read_line(&mut line) {
                     Ok(0) => break,
                     Ok(_) => {
-                        process_line(line.trim(), &tx, &mut in_call).await;
+                        process_line(line.trim(), &tx, &mut calls).await;
                     }
                     Err(e) => {
                         log::warn!("LogWatcher: read error: {e}");
@@ -88,19 +207,13 @@ async fn poll_loop(tx: mpsc::Sender<LogEvent>) {
     }
 }
 
-async fn process_line(line: &str, tx: &mpsc::Sender<LogEvent>, in_call: &mut bool) {
+async fn process_line(line: &str, tx: &mpsc::Sender<LogEvent>, calls: &mut CallState) {
     if line.contains("NotifyCallMuteStateChanged") {
         let muted = line.contains("muteState: true");
         log::debug!("LogWatcher: mute → {muted}");
         let _ = tx.send(LogEvent::MuteChanged(muted)).await;
-    } else if line.contains("NotifyCallActive") {
-        log::info!("LogWatcher: call active");
-        *in_call = true;
-        let _ = tx.send(LogEvent::MeetingChanged(true)).await;
-    } else if line.contains("CallEnded") || line.contains("NotifyCallEnded") {
-        log::info!("LogWatcher: call ended");
-        *in_call = false;
-        let _ = tx.send(LogEvent::MeetingChanged(false)).await;
+    } else if let Some(in_call) = calls.apply(line) {
+        let _ = tx.send(LogEvent::MeetingChanged(in_call)).await;
     } else if line.contains("UserPresenceAction") {
         if let Some(status) = extract_presence(line) {
             log::debug!("LogWatcher: presence → {status}");
@@ -183,4 +296,107 @@ fn find_latest_log() -> Option<PathBuf> {
         })
         .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
         .map(|e| e.path())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_call_id, CallState};
+
+    // The end/ring lines are verbatim from MSTeams_2026-07-30_09-29-23.85.log
+    // (the incident that motivated id-tracking). The NotifyCallActive line had
+    // already rotated out of Teams' log retention and is reconstructed from the
+    // Impl's uniform "…<method> callId: <guid>" style; if the real format
+    // carries no id, CallState degrades to legacy mode (tested below).
+    const ACTIVE_MEETING: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallActive callId: d84becb7-4285-4d44-9d4d-e61364d07d11";
+    const INCOMING_RING: &str =
+        "HfpVoipCallCoordinatorImpl: reportIncomingCall for callId: c9158e4a-9792-4685-8671-30226038fa77";
+    const INCOMING_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallEnded callId: c9158e4a-9792-4685-8671-30226038fa77causeId: bae9fd1b-aece-4163-a999-0db507f8de2c";
+    const MEETING_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallEnded callId: d84becb7-4285-4d44-9d4d-e61364d07d11causeId: a879e043-6006-4daf-add5-d816bc102653";
+    const MEETING_ENDED_TRACKER: &str =
+        "TeamsCallTracker: CallEnded fired: d84becb7-4285-4d44-9d4d-e61364d07d11";
+
+    #[test]
+    fn extracts_guid_glued_to_cause_id() {
+        assert_eq!(
+            extract_call_id(INCOMING_ENDED).as_deref(),
+            Some("c9158e4a-9792-4685-8671-30226038fa77")
+        );
+    }
+
+    #[test]
+    fn extracts_guid_from_tracker_line() {
+        assert_eq!(
+            extract_call_id(MEETING_ENDED_TRACKER).as_deref(),
+            Some("d84becb7-4285-4d44-9d4d-e61364d07d11")
+        );
+    }
+
+    #[test]
+    fn rejects_lines_without_guid() {
+        assert_eq!(extract_call_id("NotifyCallEnded callId: not-a-guid"), None);
+        assert_eq!(extract_call_id("CallEnded without any marker"), None);
+    }
+
+    #[test]
+    fn declined_incoming_call_does_not_end_running_meeting() {
+        // The 2026-07-30 incident, replayed line for line.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
+        assert_eq!(calls.apply(INCOMING_RING), None); // ring is not a call line
+        assert_eq!(calls.apply(INCOMING_ENDED), None); // must NOT end the meeting
+        assert!(calls.in_call());
+        assert_eq!(calls.apply(MEETING_ENDED), Some(false));
+        // Teams' duplicate end-line for the same call stays silent.
+        assert_eq!(calls.apply(MEETING_ENDED_TRACKER), None);
+    }
+
+    #[test]
+    fn duplicate_active_and_end_lines_are_idempotent() {
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
+        assert_eq!(calls.apply(ACTIVE_MEETING), None);
+        assert_eq!(calls.apply(MEETING_ENDED), Some(false));
+        assert_eq!(calls.apply(MEETING_ENDED), None);
+    }
+
+    #[test]
+    fn end_of_never_active_call_alone_stays_silent() {
+        // Declined incoming call while NOT in a meeting: nothing to end.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(INCOMING_ENDED), None);
+        assert!(!calls.in_call());
+    }
+
+    #[test]
+    fn legacy_mode_without_ids_keeps_old_semantics() {
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply("NotifyCallActive (new format?)"), Some(true));
+        assert!(calls.in_call());
+        // Any end-line closes a legacy call — id'd or not.
+        assert_eq!(calls.apply("CallEnded (new format?)"), Some(false));
+
+        assert_eq!(calls.apply("NotifyCallActive (new format?)"), Some(true));
+        assert_eq!(calls.apply(INCOMING_ENDED), Some(false));
+    }
+
+    #[test]
+    fn idless_end_line_is_noise_while_tracking_ids() {
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
+        assert_eq!(calls.apply("SomeTelemetry: CallEndedReason summary"), None);
+        assert!(calls.in_call());
+    }
+
+    #[test]
+    fn clear_resets_everything() {
+        let mut calls = CallState::default();
+        calls.apply(ACTIVE_MEETING);
+        calls.clear();
+        assert!(!calls.in_call());
+        // A late end-line for the cleared call is ignored.
+        assert_eq!(calls.apply(MEETING_ENDED), None);
+    }
 }

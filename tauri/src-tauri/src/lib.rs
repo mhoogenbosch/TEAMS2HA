@@ -292,8 +292,11 @@ pub fn run() {
             let (session_tx, mut session_rx) = mpsc::channel::<SessionEvent>(16);
             let (uia_tx, mut uia_rx) = mpsc::channel::<UiaEvent>(16);
 
-            // Start OS monitors
-            log_watcher::start(log_tx);
+            // Start OS monitors. The log watcher gets a live view on whether
+            // Teams runs: a Teams exit mid-call never logs the end-lines for
+            // running calls, so the watcher must be able to drop its call set.
+            let (teams_run_tx, teams_run_rx) = watch::channel(true);
+            log_watcher::start(log_tx, teams_run_rx);
             wasapi_monitor::start(wasapi_tx);
             mic_control::start(mic_tx);
             session_monitor::start(session_tx);
@@ -345,6 +348,8 @@ pub fn run() {
                             handle_registry_event(ev, &shared2, &mqtt_h3, &handle3).await;
                         }
                         Some(ev) = proc_rx.recv() => {
+                            let ProcessEvent::TeamsRunningChanged(running) = &ev;
+                            let _ = teams_run_tx.send(*running);
                             handle_process_event(ev, &shared2, &mqtt_h3, &handle3).await;
                         }
                         Some(ev) = mic_rx.recv() => {
