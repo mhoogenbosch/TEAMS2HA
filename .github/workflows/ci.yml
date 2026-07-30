@@ -46,3 +46,9 @@ jobs:
       - name: Cargo check
         working-directory: tauri/src-tauri
         run: cargo check --locked
+
+      # cargo check only compiles the lib/bin targets; without this the unit
+      # tests (log_watcher call tracking, recompute_muted) are never built or run.
+      - name: Cargo test
+        working-directory: tauri/src-tauri
+        run: cargo test --locked
