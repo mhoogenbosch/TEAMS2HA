@@ -3,6 +3,16 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.4.4] — 2026-07-30 (call-tracking field-test fix)
+### Fixed
+- **Duplicate `NotifyCallActive` lines no longer arm legacy mode.** The v1.4.3 field test showed Teams writes
+  *three* NotifyCallActive lines per activation, and only the Hfp one carries the call id; the two id-less
+  `CallInfo:` variants flipped the watcher into its legacy any-end-closes-the-call fallback, which would have
+  re-opened the declined-incoming-call hole v1.4.3 was built to close. Id-less active-lines are now ignored
+  while id-tracked calls exist (mirroring the end-side noise guard), and an id-bearing line supersedes a
+  legacy arm from the same activation batch. (NL: de duplicaat-logregels van Teams zetten de fix niet
+  langer buitenspel — gevonden bij de testcall na installatie van v1.4.3.)
+
 ## [v1.4.3] — 2026-07-30 (concurrent-call tracking)
 ### Fixed
 - **A declined incoming call no longer ends the running meeting.** Teams runs calls concurrently: when someone
@@ -169,6 +179,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.4.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.4
 [v1.4.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.3
 [v1.4.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.2
 [v1.4.1]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.1
