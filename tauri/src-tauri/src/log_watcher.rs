@@ -54,10 +54,25 @@ impl CallState {
                 Some(id) => {
                     log::info!("LogWatcher: call active ({id})");
                     self.active.insert(id);
+                    // An id-bearing line supersedes any id-less line from the
+                    // same activation batch (Teams writes both, order varies).
+                    self.legacy = false;
                 }
                 None => {
-                    log::warn!("LogWatcher: call active without parseable id — legacy mode");
-                    self.legacy = true;
+                    if self.active.is_empty() {
+                        log::warn!(
+                            "LogWatcher: call active without parseable id — legacy mode"
+                        );
+                        self.legacy = true;
+                    } else {
+                        // Teams logs several NotifyCallActive lines per
+                        // activation and only the Hfp one carries the call id
+                        // ("CallInfo: NotifyCallActive causeId: …", "CallInfo:
+                        // CallTracker: Calling NotifyCallActive without
+                        // deviceId…"). While id'd calls are tracked these are
+                        // duplicates, not a format change.
+                        log::debug!("LogWatcher: ignoring id-less active-line while tracking ids");
+                    }
                 }
             }
         } else if line.contains("CallEnded") || line.contains("NotifyCallEnded") {
@@ -302,13 +317,17 @@ fn find_latest_log() -> Option<PathBuf> {
 mod tests {
     use super::{extract_call_id, CallState};
 
-    // The end/ring lines are verbatim from MSTeams_2026-07-30_09-29-23.85.log
-    // (the incident that motivated id-tracking). The NotifyCallActive line had
-    // already rotated out of Teams' log retention and is reconstructed from the
-    // Impl's uniform "…<method> callId: <guid>" style; if the real format
-    // carries no id, CallState degrades to legacy mode (tested below).
+    // All lines are verbatim from the Teams logs of 2026-07-30: the end/ring
+    // lines from the incident that motivated id-tracking, the active lines
+    // from the v1.4.3 field test the same day (ids swapped for consistency).
+    // Teams writes THREE NotifyCallActive lines per activation; only the Hfp
+    // one carries the call id.
     const ACTIVE_MEETING: &str =
-        "HfpVoipCallCoordinatorImpl: NotifyCallActive callId: d84becb7-4285-4d44-9d4d-e61364d07d11";
+        "HfpVoipCallCoordinatorImpl: NotifyCallActive callId: d84becb7-4285-4d44-9d4d-e61364d07d11causeId: 5478474f-3fc5-444f-b895-4c3d96476fa8";
+    const ACTIVE_DUP_CAUSE: &str =
+        "CallInfo: NotifyCallActive causeId: 5478474f-3fc5-444f-b895-4c3d96476fa8";
+    const ACTIVE_DUP_NO_DEVICE: &str =
+        "CallInfo: CallTracker: Calling NotifyCallActive without deviceId, deviceId is empty";
     const INCOMING_RING: &str =
         "HfpVoipCallCoordinatorImpl: reportIncomingCall for callId: c9158e4a-9792-4685-8671-30226038fa77";
     const INCOMING_ENDED: &str =
@@ -380,6 +399,30 @@ mod tests {
 
         assert_eq!(calls.apply("NotifyCallActive (new format?)"), Some(true));
         assert_eq!(calls.apply(INCOMING_ENDED), Some(false));
+    }
+
+    #[test]
+    fn duplicate_idless_active_lines_do_not_arm_legacy_mode() {
+        // Field test 2026-07-30 on v1.4.3: the two CallInfo lines armed legacy
+        // mode, which would have let a declined incoming call end the meeting
+        // again — the exact bug this module exists to fix.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
+        assert_eq!(calls.apply(ACTIVE_DUP_CAUSE), None);
+        assert_eq!(calls.apply(ACTIVE_DUP_NO_DEVICE), None);
+        assert_eq!(calls.apply(INCOMING_ENDED), None);
+        assert!(calls.in_call());
+        assert_eq!(calls.apply(MEETING_ENDED), Some(false));
+    }
+
+    #[test]
+    fn id_bearing_active_line_supersedes_legacy_from_same_batch() {
+        // Same activation batch, order flipped: an id-less line arms legacy,
+        // the id-bearing line for the same call takes over cleanly.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACTIVE_DUP_NO_DEVICE), Some(true));
+        assert_eq!(calls.apply(ACTIVE_MEETING), None);
+        assert_eq!(calls.apply(MEETING_ENDED), Some(false));
     }
 
     #[test]
