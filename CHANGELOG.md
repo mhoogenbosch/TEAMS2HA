@@ -3,6 +3,27 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.0] — 2026-08-07 (meeting time also counts away from home)
+### Added
+- **Meeting time and meeting count are now accumulated in the app, so a day at the office counts too.**
+  Home gating pauses MQTT off the home network, which means an office day published nothing at all: a
+  Home Assistant helper measuring how long `isinmeeting` was `on` read that day as zero, while the OS
+  monitors had known about every call all along. `meeting_stats.rs` keeps per-day totals in
+  `meeting_stats.json` next to `settings.json` and publishes three new sensors — **Meeting Time Today**
+  (`meetingtimetoday`, hours), **Meetings Today** (`meetingstoday`) and **Meeting Time This Week**
+  (`meetingtimeweek`, hours, week starting Monday). Whatever was collected away from home is delivered
+  on the next connection from home, backfilling the day. (NL: de meetingteller loopt nu ook door op
+  kantoor; de bijgehouden tijd wordt bijgeschreven zodra de laptop weer op het thuisnetwerk zit.)
+  - Time is credited between observations — every monitor event plus a 60-second tick — and a single step
+    is capped at two ticks, so sleep, hibernate and "the process was not scheduled" cannot invent meeting
+    time out of a gap. A meeting across midnight is split over both days.
+  - The three counters are published **without** an `availability_topic`, deliberately unlike every other
+    entity: those must go unavailable while the app is away (that is what stops a state from sticking on
+    forever), but a counter has to hold its last value off the home network, or the dashboard reads
+    "unknown" for the entire office day.
+  - Totals survive restarts; the meeting state and the observation clock deliberately do not, since the
+    gap between two runs of the app is not meeting time. 21 days are retained, "this week" needs 7.
+
 ## [v1.4.4] — 2026-07-30 (call-tracking field-test fix)
 ### Fixed
 - **Duplicate `NotifyCallActive` lines no longer arm legacy mode.** The v1.4.3 field test showed Teams writes
@@ -179,6 +200,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.0]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.0
 [v1.4.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.4
 [v1.4.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.3
 [v1.4.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.4.2

@@ -2,6 +2,7 @@ mod app_state;
 mod dpapi;
 mod home_network;
 mod log_watcher;
+mod meeting_stats;
 mod mic_control;
 mod migration;
 mod mqtt_service;
@@ -14,6 +15,7 @@ mod uia_monitor;
 mod wasapi_monitor;
 
 use app_state::{new_shared, AppState, SharedState};
+use chrono::Local;
 use uia_monitor::UiaEvent;
 use home_network::HomeEvent;
 use log_watcher::LogEvent;
@@ -332,9 +334,16 @@ pub fn run() {
             let handle3 = handle.clone();
             let cmd_tx3 = cmd_tx.clone();
             let reconnect_tx3 = reconnect_tx.clone();
+            // Ticks the day totals. Needed on a timer as well as on events: a long
+            // meeting produces no monitor events at all, and the day has to roll
+            // over to zero at midnight even when nothing is happening.
+            let mut stats_ticker = tokio::time::interval(meeting_stats::TICK);
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::select! {
+                        _ = stats_ticker.tick() => {
+                            accumulate_stats(&mqtt_h3, &shared2, false).await;
+                        }
                         Some(ev) = log_rx.recv() => {
                             handle_log_event(ev, &shared2, &mqtt_h3, &handle3).await;
                         }
@@ -462,6 +471,11 @@ async fn handle_home_change(
 /// fire far more often than the state actually changes. The ConnAck path passes
 /// `force` true so a fresh connection always gets a full state push.
 async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force: bool) {
+    // Day totals first, and unconditionally: they have to keep advancing even
+    // when the state publish below is skipped as unchanged, and especially while
+    // MQTT is paused off the home network — that is what they exist for.
+    accumulate_stats(mqtt, shared, force).await;
+
     let state = {
         let s = shared.read().await;
         if !force && s.last_published.as_ref() == Some(&s.meeting) {
@@ -483,6 +497,42 @@ async fn publish(mqtt: &MqttHandle, app: &AppHandle, shared: &SharedState, force
     }
     update_tray(app, &state);
     app.emit("state-update", &state).ok();
+}
+
+/// Feed the current meeting state into the local day totals and publish them when
+/// the value HA sees changed. Runs on every monitor event and on a timer, because
+/// the accumulator has to keep counting while MQTT is paused off the home network;
+/// what it collected there is delivered by the ConnAck republish on the way back.
+async fn accumulate_stats(mqtt: &MqttHandle, shared: &SharedState, force: bool) {
+    let now = Local::now();
+    let snapshot = {
+        let mut s = shared.write().await;
+        let in_meeting = s.meeting.is_in_meeting;
+        let (snapshot, grew) = s.stats.observe(now, in_meeting);
+        if grew {
+            s.stats.save();
+        }
+        // Nothing HA can see changed, so there is nothing to send. `force` (the
+        // ConnAck path) republishes anyway: a fresh connection needs the totals,
+        // including a whole day accumulated while MQTT was paused.
+        if !force && s.last_published_stats == Some(snapshot) {
+            return;
+        }
+        snapshot
+    };
+    let published = {
+        let service = mqtt.read().await;
+        match service.as_ref() {
+            Some(svc) => svc.publish_stats(&snapshot),
+            // MQTT paused (away from home) — retried on the next observation,
+            // and in full on the ConnAck republish once back home.
+            None => return,
+        }
+    };
+    match published {
+        Ok(()) => shared.write().await.last_published_stats = Some(snapshot),
+        Err(e) => log::warn!("Publish stats error: {e}"),
+    }
 }
 
 async fn handle_mqtt_command(
