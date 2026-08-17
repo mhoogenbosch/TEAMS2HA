@@ -57,10 +57,18 @@ Dependency updates run themselves: Dependabot opens one grouped pull request per
 ecosystem per week, `dependabot-auto-merge.yml` merges minor/patch once every
 check is green (majors are left for review), and `dep-release.yml` then writes
 the CHANGELOG section, tags, and dispatches `release.yml`. Feature releases stay
-manual. Because a push made with `GITHUB_TOKEN` cannot trigger another workflow,
-that chain hands off through `workflow_dispatch` — do not "simplify" it into a
-tag push, and do not add required status checks to `master`, which would block
-the CHANGELOG commit that `dep-release.yml` pushes.
+manual.
+
+Two constraints shape that chain, both easy to "simplify" into a broken state:
+
+- A push made with `GITHUB_TOKEN` cannot trigger another workflow, so the
+  hand-off to `release.yml` goes through `workflow_dispatch` on the tag ref.
+  Do not turn it back into a tag push.
+- `master` requires that changes arrive through a pull request. A maintainer can
+  bypass that (admins are not enforced); the bot cannot, so `dep-release.yml`
+  opens and merges its own CHANGELOG pull request instead of pushing. Adding
+  required status checks on top would block that merge as well, since nothing
+  approves or waits for the bot.
 
 ## Security notes
 
