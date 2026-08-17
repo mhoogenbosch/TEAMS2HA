@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write # the CHANGELOG lands through a pull request, see below
   actions: write # to dispatch release.yml
 
 # Two merges landing at once must not race into two half-releases.
@@ -37,18 +38,48 @@ jobs:
         id: prep
         run: python3 .github/scripts/prepare-dep-release.py
 
-      - name: Commit and tag
+      # master requires that changes arrive through a pull request, and the bot
+      # is no admin, so it cannot bypass that the way a maintainer can — a plain
+      # `git push origin HEAD:master` is rejected. It can open and merge its own
+      # pull request though: the rule asks for a pull request, not for a human
+      # approval (0 reviews required). The tag then points at the squashed
+      # commit on master.
+      - name: Commit the CHANGELOG through a pull request
         if: steps.prep.outputs.release == 'true'
         env:
           TAG: ${{ steps.prep.outputs.version }}
         run: |
           set -euo pipefail
+          branch="chore/changelog-$TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
           git commit -m "CHANGELOG: finalize $TAG (dependency updates)" CHANGELOG.md
-          git pull --rebase --autostash origin master
-          git push origin HEAD:master
-          git tag "$TAG"
+          git push origin "$branch"
+          gh pr create --base master --head "$branch" \
+            --title "CHANGELOG: finalize $TAG (dependency updates)" \
+            --body "Opened by the Dependency release workflow: the CHANGELOG section for \`$TAG\`, which is tagged as soon as this lands."
+          # A freshly opened pull request reports its mergeability asynchronously,
+          # so the first attempt can legitimately come back "not mergeable".
+          for attempt in 1 2 3 4 5; do
+            if gh pr merge "$branch" --squash --delete-branch; then
+              break
+            fi
+            if [ "$attempt" = 5 ]; then
+              echo "::error::Could not merge $branch after 5 attempts."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Tag the release
+        if: steps.prep.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.prep.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          git tag "$TAG" origin/master
           git push origin "$TAG"
 
       # A tag pushed with GITHUB_TOKEN does not start the Release workflow

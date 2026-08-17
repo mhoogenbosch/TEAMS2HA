@@ -48,11 +48,14 @@ jobs:
         id: pr
         run: |
           set -euo pipefail
+          # Draft is the natural way to park a Dependabot pull request by hand
+          # (e.g. to keep it out of a release that is being cut), so a draft is
+          # left alone rather than failing the merge step on it.
           number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
-            --json number,author,headRefOid \
-            --jq ".[] | select(.author.login == \"app/dependabot\" or .author.login == \"dependabot[bot]\") | select(.headRefOid == \"$HEAD_SHA\") | .number" | head -1)
+            --json number,author,headRefOid,isDraft \
+            --jq ".[] | select(.author.login == \"app/dependabot\" or .author.login == \"dependabot[bot]\") | select(.headRefOid == \"$HEAD_SHA\") | select(.isDraft == false) | .number" | head -1)
           if [ -z "$number" ]; then
-            echo "No open Dependabot pull request on $BRANCH at $HEAD_SHA — nothing to merge."
+            echo "No open, non-draft Dependabot pull request on $BRANCH at $HEAD_SHA — nothing to merge."
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
