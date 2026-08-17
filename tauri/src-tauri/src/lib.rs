@@ -334,11 +334,18 @@ pub fn run() {
             let handle3 = handle.clone();
             let cmd_tx3 = cmd_tx.clone();
             let reconnect_tx3 = reconnect_tx.clone();
-            // Ticks the day totals. Needed on a timer as well as on events: a long
-            // meeting produces no monitor events at all, and the day has to roll
-            // over to zero at midnight even when nothing is happening.
-            let mut stats_ticker = tokio::time::interval(meeting_stats::TICK);
             tauri::async_runtime::spawn(async move {
+                // Ticks the day totals. Needed on a timer as well as on events: a
+                // long meeting produces no monitor events at all, and the day has
+                // to roll over to zero at midnight even when nothing is happening.
+                //
+                // Constructed INSIDE the task on purpose: tokio::time::interval
+                // panics when it is created outside a runtime ("there is no
+                // reactor running"), and Tauri's setup hook is synchronous. Built
+                // there, v1.5.0 through v1.5.2 panicked on every start.
+                let mut stats_ticker = tokio::time::interval(meeting_stats::TICK);
+                // A wake from suspend must not fire one tick per minute slept.
+                stats_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     tokio::select! {
                         _ = stats_ticker.tick() => {
