@@ -3,6 +3,18 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.3] — 2026-08-17 (fixes the startup crash in v1.5.0–v1.5.2)
+### Fixed
+- **The app starts again.** v1.5.0 introduced the day counters with their one-minute ticker built in Tauri's
+  `setup` hook — which is synchronous, and `tokio::time::interval` panics when it is constructed outside a
+  runtime: `there is no reactor running, must be called from the context of a Tokio 1.x runtime`. Every start
+  of v1.5.0, v1.5.1 and v1.5.2 died there, and on a machine with the resume-watchdog installed that became a
+  restart loop every three minutes. The ticker is now created inside the spawned task, where the runtime
+  exists, and it no longer fires one tick per minute slept after a wake from suspend
+  (`MissedTickBehavior::Delay`, as the other monitors already did). Found on hardware within the hour, since
+  nothing about it is visible to `cargo check`, `cargo test` or clippy — the panic only happens at runtime.
+  (NL: v1.5.0 t/m v1.5.2 startten niet; de meetingteller-ticker werd op de verkeerde plek aangemaakt.)
+
 ## [v1.5.2] — 2026-08-17 (dependency updates)
 ### Dependencies
 - Bump tauri-apps/tauri-action from 0 to 1
@@ -232,6 +244,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.3
 [v1.5.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.2
 [v1.5.1]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.1
 [v1.5.0]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.0
