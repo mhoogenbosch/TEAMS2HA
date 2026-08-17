@@ -79,22 +79,43 @@ jobs:
             sleep 10
           done
 
+      # Two ways to get the tag onto the remote, and the difference decides
+      # whether the release publishes itself:
+      #
+      # * With RELEASE_PAT the push carries a real identity, so it fires the push
+      #   trigger on release.yml like a hand-pushed tag always has.
+      # * With GITHUB_TOKEN the push starts nothing (Actions does not trigger
+      #   itself), so release.yml has to be dispatched — and a dispatched run is
+      #   refused when it tries to CREATE the GitHub release ("Resource not
+      #   accessible by integration"), while uploading assets to an existing one
+      #   is allowed. Proven on 2026-08-17: v1.5.0 (tag push) published itself,
+      #   v1.5.1 (dispatch) built fine and then could not create its release.
       - name: Tag the release
+        id: tag
         if: steps.prep.outputs.release == 'true'
         env:
           TAG: ${{ steps.prep.outputs.version }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         run: |
           set -euo pipefail
           git fetch origin master
           git tag "$TAG" origin/master
-          git push origin "$TAG"
+          if [ -n "${RELEASE_PAT:-}" ]; then
+            git push "https://x-access-token:${RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
+            echo "dispatch=false" >> "$GITHUB_OUTPUT"
+            echo "Tag pushed with RELEASE_PAT — release.yml runs from the push."
+          else
+            git push origin "$TAG"
+            echo "dispatch=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::RELEASE_PAT is not set (or expired), so release.yml is dispatched instead and cannot create the release for $TAG. Run 'gh release create $TAG --notes-file <the CHANGELOG section>' and re-run release.yml on that tag, or set the secret."
+          fi
 
-      # A tag pushed with GITHUB_TOKEN does not start the Release workflow
-      # (Actions refuses to trigger itself recursively), so it is dispatched on
-      # the tag ref instead — workflow_dispatch is the documented exception.
-      # release.yml reads the version from github.ref_name either way.
+      # Only needed on the GITHUB_TOKEN path: that push started nothing, so the
+      # build has to be asked for. workflow_dispatch is the documented exception
+      # to "events from GITHUB_TOKEN do not trigger workflows". release.yml reads
+      # the version from github.ref_name either way.
       - name: Build and publish the release
-        if: steps.prep.outputs.release == 'true'
+        if: steps.prep.outputs.release == 'true' && steps.tag.outputs.dispatch == 'true'
         env:
           TAG: ${{ steps.prep.outputs.version }}
         run: gh workflow run release.yml --ref "$TAG"
