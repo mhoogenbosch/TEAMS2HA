@@ -69,8 +69,17 @@ Published via MQTT discovery under your chosen name:
 - `switch/<YOURNAME>/micsystemmuted` — system-wide mute of the default communications microphone (genuinely controllable from HA)
 - `sensor/<YOURNAME>/teamsstatus` — presence (Available/Busy/…)
 - a `notify` entity ("Toast") — `notify.send_message` shows a Windows toast on the machine
+- `sensor/<YOURNAME>/meetingtimetoday`, `sensor/<YOURNAME>/meetingstoday`, `sensor/<YOURNAME>/meetingtimeweek` — day and week totals (see below)
 
-Each carries an availability topic so HA shows them as `unavailable` when the app is away.
+Each carries an availability topic so HA shows them as `unavailable` when the app is away — except the three totals, which keep their last value (see below).
+
+### Meeting totals (this fork)
+Because Home Detection pauses MQTT on other networks, a day spent elsewhere would publish nothing and a
+Home Assistant helper measuring how long `isinmeeting` was `on` would read it as zero. The app therefore
+counts meeting time and meetings itself, in `meeting_stats.json` next to the settings file, and publishes
+the totals for today and the current week (starting Monday). What was accumulated away from home is sent
+on the next connection from home, which backfills that day. Sleep and hibernate do not count as meeting
+time, and a meeting running across midnight is split over both days.
 
 > **Why sensors, not switches?** Microsoft retired the Teams local API, so `ismuted`/`isvideoon` commands had nowhere to go — a toggle that silently bounces back. Since v1.4.0 they are binary sensors; the system-mic switch is the one control that genuinely works. **Upgrading from ≤ v1.3.x:** the old switch entities are removed automatically (retained discovery configs are cleared) — update any HA automations that referenced `switch.…_is_muted` / `switch.…_is_video_on` to the new `binary_sensor` entities.
 

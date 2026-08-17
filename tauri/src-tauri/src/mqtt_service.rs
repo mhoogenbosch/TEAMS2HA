@@ -1,3 +1,4 @@
+use crate::meeting_stats::Snapshot;
 use crate::settings::Settings;
 use anyhow::Result;
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS, TlsConfiguration, Transport};
@@ -216,7 +217,37 @@ impl MqttService {
         anyhow::ensure!(all_ok, "one or more MQTT state publishes failed");
         Ok(())
     }
+
+    /// Publish the locally accumulated day totals (see `meeting_stats`).
+    pub fn publish_stats(&self, snapshot: &Snapshot) -> Result<()> {
+        let prefix = &self.prefix;
+        let mut all_ok = true;
+
+        let values: [(&str, String); 3] = [
+            (STATS_TIME_TODAY, format!("{:.2}", snapshot.today_hours())),
+            (STATS_COUNT_TODAY, snapshot.today_count.to_string()),
+            (STATS_TIME_WEEK, format!("{:.2}", snapshot.week_hours())),
+        ];
+        for (id, value) in &values {
+            if let Err(e) = self.client.try_publish(
+                format!("homeassistant/sensor/{prefix}/{id}/state"),
+                QoS::AtLeastOnce,
+                true,
+                value.as_bytes().to_vec(),
+            ) {
+                all_ok = false;
+                log::warn!("MQTT publish failed [{id}]: {e}");
+            }
+        }
+
+        anyhow::ensure!(all_ok, "one or more MQTT stats publishes failed");
+        Ok(())
+    }
 }
+
+const STATS_TIME_TODAY: &str = "meetingtimetoday";
+const STATS_COUNT_TODAY: &str = "meetingstoday";
+const STATS_TIME_WEEK: &str = "meetingtimeweek";
 
 /// TLS config for the "ignore certificate errors" setting: still a real TLS
 /// handshake, but self-signed and hostname-mismatched broker certificates are
@@ -408,6 +439,53 @@ fn publish_discovery_inner(client: &AsyncClient, prefix: &str) {
         serde_json::to_vec(&teamsstatus_payload).unwrap_or_default(),
     ) {
         log::warn!("Discovery publish failed for teamsstatus: {e}");
+    }
+
+    // Day counters from the local accumulator (see meeting_stats). Deliberately
+    // published WITHOUT an availability_topic, unlike every entity above: those
+    // have to go unavailable while the app is away, which is what stops a state
+    // from sticking on forever. A counter is the opposite case — it must hold its
+    // last value off the home network, or the dashboard reads "unknown" for the
+    // whole office day and the backfill on the next connect lands on nothing.
+    let counters = [
+        (
+            STATS_TIME_TODAY,
+            "Meeting Time Today",
+            Some("h"),
+            "mdi:clock-outline",
+        ),
+        (STATS_COUNT_TODAY, "Meetings Today", None, "mdi:counter"),
+        (
+            STATS_TIME_WEEK,
+            "Meeting Time This Week",
+            Some("h"),
+            "mdi:clock-outline",
+        ),
+    ];
+    for (id, name, unit, icon) in &counters {
+        let mut payload = json!({
+            "name": name,
+            "unique_id": format!("{prefix}_{id}"),
+            "state_topic": format!("homeassistant/sensor/{prefix}/{id}/state"),
+            "state_class": "measurement",
+            "icon": icon,
+            "device": device
+        });
+        if let Some(unit) = unit {
+            payload["unit_of_measurement"] = json!(unit);
+            payload["device_class"] = json!("duration");
+            // Published with two decimals; one is what reads well on a dashboard
+            // and it stays overridable per entity in HA.
+            payload["suggested_display_precision"] = json!(1);
+        }
+        if let Err(e) = client.try_publish(
+            format!("homeassistant/sensor/{prefix}/{id}/config"),
+            QoS::AtLeastOnce,
+            true,
+            serde_json::to_vec(&payload).unwrap_or_default(),
+        ) {
+            log::warn!("Discovery publish failed for {id}: {e}");
+        }
     }
 
     log::info!("MQTT: discovery published for prefix '{prefix}'");
