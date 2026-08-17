@@ -24,6 +24,27 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
   - Totals survive restarts; the meeting state and the observation clock deliberately do not, since the
     gap between two runs of the app is not meeting time. 21 days are retained, "this week" needs 7.
 
+### Fixed
+- **A meeting no longer stays "on" for days because Teams rotated its log.** Teams writes 2 MB log files,
+  which during a call means a new file every ~3½ minutes (35 rotations between 06:19 and 08:29 on 17-08),
+  and the watcher seeked to the *end* of every file it opened — including a freshly rotated one. Rotation is
+  noticed at the 5-second rescan, about 4 seconds after Teams creates the file, so at ~10 KB/s roughly 40 KB
+  of log went unread each time. A `NotifyCallEnded` landing in that window is never seen and the call id
+  stays active; because Teams survives hibernation (one process here ran from 07-08 to 17-08), nothing
+  cleared it. `is_in_meeting` was pinned from 15-08 until Teams finally exited on 17-08 at 08:30, and Home
+  Assistant's `history_stats` helpers counted the pin as meeting time: 8.5 hours of "meetings" measured at
+  08:29 that morning. A rotated file is now read from byte 0, with the previous handle drained first; only
+  the first file of a run still tails from the end, since that one predates the app and would otherwise be
+  replayed as if it were happening now. (NL: door een gemiste end-regel bij logrotatie bleef de
+  meeting-sensor dagen aan staan, en liep de meetingteller de hele nacht door.)
+  - Two floors under that fix, not the fix itself: active calls are dropped on resume from suspend (a call
+    does not survive a sleep, so whatever is still "active" is stale — the same clock-gap signal
+    `registry_monitor` already uses), and a call still active after 12 hours without an end-line is dropped
+    as stale with a warning in the log.
+  - This is a third, independent cause of a stuck `is_in_meeting`, next to the missing `availability_topic`
+    (fixed in v1.3.x) and the declined-incoming-call bug (v1.4.3/v1.4.4). It matters most for the counters
+    above: they measure the same meeting state, so a pinned call would have inflated them just as badly.
+
 ## [v1.4.4] — 2026-07-30 (call-tracking field-test fix)
 ### Fixed
 - **Duplicate `NotifyCallActive` lines no longer arm legacy mode.** The v1.4.3 field test showed Teams writes
