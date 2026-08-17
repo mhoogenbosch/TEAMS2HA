@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Dispatched on a tag ref by dep-release.yml (a tag pushed with GITHUB_TOKEN
+  # does not fire the push trigger), and usable by hand to rebuild a tag.
+  workflow_dispatch:
 
 permissions:
   contents: write

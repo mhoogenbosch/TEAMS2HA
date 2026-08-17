@@ -45,6 +45,23 @@ The shell plugin was removed because it was registered but never used.
 | `tauri/src/components/Settings.jsx` | Settings UI (React) |
 | `tauri/src/components/StatusBar.jsx` | Header status bar with presence + connection indicators |
 
+## Releases
+
+Releases are tag-driven: `release.yml` derives the version from the `vX.Y.Z` tag
+and stamps it into `package.json`, `tauri.conf.json` and `Cargo.toml` at build
+time, so the versions committed in those files are stale by design — never bump
+them by hand. Release notes are the tag's `CHANGELOG.md` section plus
+`RELEASE_TEMPLATE.md`, so the section must exist before the tag is pushed.
+
+Dependency updates run themselves: Dependabot opens one grouped pull request per
+ecosystem per week, `dependabot-auto-merge.yml` merges minor/patch once every
+check is green (majors are left for review), and `dep-release.yml` then writes
+the CHANGELOG section, tags, and dispatches `release.yml`. Feature releases stay
+manual. Because a push made with `GITHUB_TOKEN` cannot trigger another workflow,
+that chain hands off through `workflow_dispatch` — do not "simplify" it into a
+tag push, and do not add required status checks to `master`, which would block
+the CHANGELOG commit that `dep-release.yml` pushes.
+
 ## Security notes
 
 - The app is unsigned. Defender may flag registry writes in unsigned binaries.

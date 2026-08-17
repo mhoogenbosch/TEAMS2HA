@@ -1,0 +1,66 @@
+name: Dependency release
+
+# Turns merged Dependabot bumps into a released version: finalize CHANGELOG.md,
+# tag, and hand the tag to the Release workflow, which builds and publishes as
+# it does for any other tag.
+#
+# Dispatched by dependabot-auto-merge.yml after a merge that touched the app,
+# and runnable by hand ("Run workflow" on master) to release whatever bumps are
+# sitting on master. It stops without doing anything when there are none.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write # to dispatch release.yml
+
+# Two merges landing at once must not race into two half-releases.
+concurrency:
+  group: dep-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Amsterdam # the date in the CHANGELOG heading is local, not UTC
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0 # tags and history: the script reads both
+
+      - name: Prepare the version and CHANGELOG
+        id: prep
+        run: python3 .github/scripts/prepare-dep-release.py
+
+      - name: Commit and tag
+        if: steps.prep.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.prep.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "CHANGELOG: finalize $TAG (dependency updates)" CHANGELOG.md
+          git pull --rebase --autostash origin master
+          git push origin HEAD:master
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      # A tag pushed with GITHUB_TOKEN does not start the Release workflow
+      # (Actions refuses to trigger itself recursively), so it is dispatched on
+      # the tag ref instead — workflow_dispatch is the documented exception.
+      # release.yml reads the version from github.ref_name either way.
+      - name: Build and publish the release
+        if: steps.prep.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.prep.outputs.version }}
+        run: gh workflow run release.yml --ref "$TAG"
+
+      - name: Nothing to release
+        if: steps.prep.outputs.release != 'true'
+        run: echo "::notice::No unreleased dependency commits on master."
