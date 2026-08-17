@@ -3,7 +3,7 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
-## [v1.5.0] — 2026-08-07 (meeting time also counts away from home)
+## [v1.5.0] — 2026-08-17 (meeting time also counts away from home)
 ### Added
 - **Meeting time and meeting count are now accumulated in the app, so a day at the office counts too.**
   Home gating pauses MQTT off the home network, which means an office day published nothing at all: a
