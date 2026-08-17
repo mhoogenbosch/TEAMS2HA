@@ -1,0 +1,119 @@
+name: Dependabot auto-merge
+
+# Merges Dependabot's minor/patch pull requests once every check on the head
+# commit is green, then asks the Dependency release workflow for a new version.
+#
+# Triggered by CI finishing rather than by the pull request itself: workflows
+# started by a Dependabot `pull_request` event get a read-only GITHUB_TOKEN and
+# no secrets, so they cannot merge anything. A `workflow_run` runs in the
+# context of the base repository with a normal token, and it only fires after
+# CI has already reported, which is exactly when we want to look at the PR.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # to dispatch dep-release.yml
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    # CI also runs on the branch push, which fires this workflow a second time
+    # for the same commit; only the pull_request run is acted on.
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/') &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      # The workflow_run payload carries a branch and a sha but not the pull
+      # request, and the sha is checked against the PR head so a push that
+      # landed after CI started cannot ride in unverified.
+      - name: Locate the pull request
+        id: pr
+        run: |
+          set -euo pipefail
+          number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number,author,headRefOid \
+            --jq ".[] | select(.author.login == \"app/dependabot\" or .author.login == \"dependabot[bot]\") | select(.headRefOid == \"$HEAD_SHA\") | .number" | head -1)
+          if [ -z "$number" ]; then
+            echo "No open Dependabot pull request on $BRANCH at $HEAD_SHA — nothing to merge."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Pull request #$number"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      # Dependabot records what it did in a trailer on its own commit:
+      #   updated-dependencies:
+      #   - dependency-name: serde
+      #     update-type: version-update:semver-patch
+      # A major bump anywhere in that list (grouped PRs list several) means the
+      # PR is left open for review. Read from the commit rather than the PR
+      # title, which is free text.
+      - name: Refuse major updates
+        id: gate
+        if: steps.pr.outputs.found == 'true'
+        run: |
+          set -euo pipefail
+          message=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.message')
+          if ! grep -q 'update-type: version-update:semver-' <<<"$message"; then
+            echo "::warning::No update-type trailer on $HEAD_SHA — refusing to auto-merge."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -q 'update-type: version-update:semver-major' <<<"$message"; then
+            echo "Major update — leaving #${{ steps.pr.outputs.number }} open for manual review."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # CI is green (that is the trigger), but cargo audit, clippy and CodeQL
+      # may still be running. --fail-fast aborts the job on the first failure,
+      # which leaves the pull request open.
+      - name: Wait for the remaining checks
+        if: steps.gate.outputs.proceed == 'true'
+        timeout-minutes: 45
+        run: gh pr checks "${{ steps.pr.outputs.number }}" --repo "$REPO" --watch --fail-fast --interval 30
+
+      # Does this bump reach the app, or only the workflows? Action bumps get
+      # merged but produce no release: they cannot change what runs on a laptop.
+      - name: Decide whether a release is needed
+        id: scope
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          files=$(gh pr view "${{ steps.pr.outputs.number }}" --repo "$REPO" --json files --jq '.files[].path')
+          echo "$files"
+          if grep -q '^tauri/' <<<"$files"; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge
+        if: steps.gate.outputs.proceed == 'true'
+        run: gh pr merge "${{ steps.pr.outputs.number }}" --repo "$REPO" --squash --delete-branch
+
+      # A push made with GITHUB_TOKEN starts no workflow, so the release chain
+      # is dispatched explicitly — workflow_dispatch is exempt from that rule.
+      - name: Ask for a dependency release
+        if: steps.gate.outputs.proceed == 'true' && steps.scope.outputs.release == 'true'
+        run: gh workflow run dep-release.yml --repo "$REPO" --ref master

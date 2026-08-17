@@ -4,6 +4,25 @@ updates:
     directory: /tauri/src-tauri
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    # One pull request for all minor+patch bumps: those are auto-merged and each
+    # merge produces a release build, so grouping keeps that to one release per
+    # week per ecosystem instead of one per crate. Major bumps fall outside the
+    # group, arrive as individual pull requests and are never auto-merged.
+    groups:
+      cargo-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
     ignore:
       # Both of these are transitive deps locked by Tauri's own dependency
       # constraints. We cannot resolve them without Tauri releasing updates.
@@ -20,3 +39,40 @@ updates:
     directory: /tauri
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The workflows pin actions by major tag (checkout@v4, setup-node@v4, ...);
+  # nothing kept these current. Action bumps never change the app, so they are
+  # merged but do not trigger a release build.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Amsterdam
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
