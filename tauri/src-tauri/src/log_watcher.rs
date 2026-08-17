@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
-use tokio::time::interval;
+use tokio::time::{interval, MissedTickBehavior};
 
 #[derive(Debug, Clone)]
 // The shared "Changed" postfix is deliberate: it matches the other monitors'
@@ -27,43 +27,50 @@ pub enum LogEvent {
 /// last one is gone.
 #[derive(Default)]
 struct CallState {
-    /// Ids seen in a `NotifyCallActive` line.
-    active: HashSet<String>,
-    /// A `NotifyCallActive` line carried no parseable id (format drift):
-    /// fall back to the pre-id semantics where any end-line closes the call.
-    legacy: bool,
+    /// Ids seen in a `NotifyCallActive` line, with the moment they were seen —
+    /// the timestamp exists so `expire` can drop a call whose end-line never
+    /// arrived (see `STALE_CALL`).
+    active: HashMap<String, Instant>,
+    /// Set when a `NotifyCallActive` line carried no parseable id (format
+    /// drift): fall back to the pre-id semantics where any end-line closes the
+    /// call. Carries the same timestamp, for the same reason.
+    legacy: Option<Instant>,
 }
 
 impl CallState {
     fn in_call(&self) -> bool {
-        self.legacy || !self.active.is_empty()
+        self.legacy.is_some() || !self.active.is_empty()
     }
 
     fn clear(&mut self) {
         self.active.clear();
-        self.legacy = false;
+        self.legacy = None;
     }
 
     /// Feed one log line through the call state machine. Returns the new
     /// in-call value when the line *transitions* it, None otherwise (either
     /// not a call line, or a call line that doesn't change the outcome).
     fn apply(&mut self, line: &str) -> Option<bool> {
+        self.apply_at(line, Instant::now())
+    }
+
+    fn apply_at(&mut self, line: &str, now: Instant) -> Option<bool> {
         let was = self.in_call();
         if line.contains("NotifyCallActive") || line.contains("reportCallActive") {
             match extract_call_id(line) {
                 Some(id) => {
                     log::info!("LogWatcher: call active ({id})");
-                    self.active.insert(id);
+                    self.active.insert(id, now);
                     // An id-bearing line supersedes any id-less line from the
                     // same activation batch (Teams writes both, order varies).
-                    self.legacy = false;
+                    self.legacy = None;
                 }
                 None => {
                     if self.active.is_empty() {
                         log::warn!(
                             "LogWatcher: call active without parseable id — legacy mode"
                         );
-                        self.legacy = true;
+                        self.legacy = Some(now);
                     } else {
                         // Teams logs several NotifyCallActive lines per
                         // activation and only the Hfp one carries the call id
@@ -78,13 +85,13 @@ impl CallState {
         } else if line.contains("CallEnded") || line.contains("NotifyCallEnded") {
             match extract_call_id(line) {
                 Some(id) => {
-                    if self.active.remove(&id) {
+                    if self.active.remove(&id).is_some() {
                         log::info!("LogWatcher: call ended ({id})");
-                    } else if self.active.is_empty() && self.legacy {
+                    } else if self.active.is_empty() && self.legacy.is_some() {
                         // An id-less active call is closed by whichever
                         // end-line arrives first.
                         log::info!("LogWatcher: call ended (legacy, {id})");
-                        self.legacy = false;
+                        self.legacy = None;
                     } else {
                         // End of a call that never went active here: a
                         // declined/missed incoming call, or one of the
@@ -95,10 +102,10 @@ impl CallState {
                 }
                 None => {
                     if self.active.is_empty() {
-                        if self.legacy {
+                        if self.legacy.is_some() {
                             log::info!("LogWatcher: call ended (no id)");
                         }
-                        self.legacy = false;
+                        self.legacy = None;
                     } else {
                         // We are tracking id'd calls; an end-line without an
                         // id is log noise, not one of ours.
@@ -109,8 +116,39 @@ impl CallState {
         } else {
             return None;
         }
-        let now = self.in_call();
-        (now != was).then_some(now)
+        let in_call = self.in_call();
+        (in_call != was).then_some(in_call)
+    }
+
+    /// Drop calls that have been active longer than `max_age`, and report the
+    /// new in-call value when that ends the meeting.
+    ///
+    /// The floor under the rotation fix below: a `NotifyCallEnded` that never
+    /// reaches us pins `is_in_meeting` on until Teams exits, and Teams survives
+    /// hibernation, so "until Teams exits" was 10 days in the 2026-08-17
+    /// incident. A Teams call does not run for half a day; a pinned state does.
+    fn expire(&mut self, max_age: Duration) -> Option<bool> {
+        self.expire_at(Instant::now(), max_age)
+    }
+
+    fn expire_at(&mut self, now: Instant, max_age: Duration) -> Option<bool> {
+        let was = self.in_call();
+        self.active.retain(|id, seen| {
+            let keep = now.duration_since(*seen) <= max_age;
+            if !keep {
+                log::warn!("LogWatcher: dropping call {id} — active for over {max_age:?} with no end-line");
+            }
+            keep
+        });
+        if self
+            .legacy
+            .is_some_and(|seen| now.duration_since(seen) > max_age)
+        {
+            log::warn!("LogWatcher: dropping id-less call — active for over {max_age:?}");
+            self.legacy = None;
+        }
+        let in_call = self.in_call();
+        (in_call != was).then_some(in_call)
     }
 }
 
@@ -145,14 +183,25 @@ pub fn start(tx: mpsc::Sender<LogEvent>, teams_running: watch::Receiver<bool>) {
 /// app, and rotation being noticed a few seconds late is harmless.
 const LOG_RESCAN: Duration = Duration::from_secs(5);
 
+/// A tick arriving this much late means the process was frozen in between: the
+/// machine slept. Same signal (and the same reasoning) as `registry_monitor`.
+const RESUME_GAP: Duration = Duration::from_secs(60);
+
+/// How long a call may stay active without an end-line before it is dropped as
+/// stale. See `CallState::expire`.
+const STALE_CALL: Duration = Duration::from_secs(12 * 60 * 60);
+
 async fn poll_loop(tx: mpsc::Sender<LogEvent>, mut teams_running: watch::Receiver<bool>) {
     let mut current_file: Option<PathBuf> = None;
-    let mut file_handle: Option<(BufReader<File>, u64)> = None;
+    let mut file_handle: Option<BufReader<File>> = None;
     let mut calls = CallState::default();
 
     let mut tick = interval(Duration::from_millis(250));
+    // No catch-up burst of ticks after a suspend.
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut latest_cached: Option<PathBuf> = None;
     let mut next_scan = tokio::time::Instant::now();
+    let mut previous_tick = Instant::now();
 
     loop {
         tick.tick().await;
@@ -171,9 +220,25 @@ async fn poll_loop(tx: mpsc::Sender<LogEvent>, mut teams_running: watch::Receive
             }
         }
 
+        // A call cannot survive a suspend: the network drops and Teams tears it
+        // down, usually without us ever reading the end-line. Whatever is still
+        // "active" here is therefore stale by definition.
+        if previous_tick.elapsed() > RESUME_GAP {
+            let was = calls.in_call();
+            calls.clear();
+            if was {
+                log::info!("LogWatcher: resume detected — clearing active call state");
+                let _ = tx.send(LogEvent::MeetingChanged(false)).await;
+            }
+        }
+        previous_tick = Instant::now();
+
         if tokio::time::Instant::now() >= next_scan {
             next_scan = tokio::time::Instant::now() + LOG_RESCAN;
             latest_cached = find_latest_log();
+            if let Some(in_call) = calls.expire(STALE_CALL) {
+                let _ = tx.send(LogEvent::MeetingChanged(in_call)).await;
+            }
         }
         let latest = match latest_cached.clone() {
             Some(p) => p,
@@ -182,41 +247,82 @@ async fn poll_loop(tx: mpsc::Sender<LogEvent>, mut teams_running: watch::Receive
 
         // Switched to a new log file
         if current_file.as_deref() != Some(&latest) {
-            log::info!("LogWatcher: opening {}", latest.display());
-            match File::open(&latest) {
-                Ok(f) => {
-                    let mut reader = BufReader::new(f);
-                    // Scan the last 256 KB for the most recent presence entry
-                    // before tailing, so we report current status immediately.
-                    if let Some(presence) = scan_last_presence(&mut reader) {
-                        log::info!("LogWatcher: initial presence → {presence}");
-                        let _ = tx.send(LogEvent::PresenceChanged(presence)).await;
-                    }
-                    let end = reader.seek(SeekFrom::End(0)).unwrap_or(0);
-                    file_handle = Some((reader, end));
+            // Teams rotates at 2 MB, which under call load is every few
+            // minutes, and rotation is noticed up to LOG_RESCAN late. Drain
+            // what is left in the old handle, then read the rotated file from
+            // byte 0: everything in it was written after we opened its
+            // predecessor. Seeking to the end here instead is how a
+            // NotifyCallEnded went missing and pinned is_in_meeting on for ten
+            // days (2026-08-17) — ~40 KB of log per rotation was skipped.
+            let rotated = current_file.is_some();
+            if let Some(reader) = &mut file_handle {
+                drain(reader, &tx, &mut calls).await;
+            }
+            match open_log(&latest, rotated, &tx).await {
+                Some(reader) => {
+                    file_handle = Some(reader);
                     current_file = Some(latest);
                 }
-                Err(e) => {
-                    log::warn!("LogWatcher: cannot open log: {e}");
-                    continue;
-                }
+                None => continue,
             }
         }
 
-        if let Some((reader, _pos)) = &mut file_handle {
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        process_line(line.trim(), &tx, &mut calls).await;
-                    }
-                    Err(e) => {
-                        log::warn!("LogWatcher: read error: {e}");
-                        break;
-                    }
-                }
+        if let Some(reader) = &mut file_handle {
+            drain(reader, &tx, &mut calls).await;
+        }
+    }
+}
+
+/// Open a log file for tailing, positioned according to why we are opening it.
+///
+/// `rotated` = we were already tailing a predecessor, so this file was created
+/// moments ago and every line in it is news: start at byte 0. Otherwise this is
+/// the first file of the run, which can be hours of history that must not be
+/// replayed as if it were happening now: take the last known presence from it
+/// and tail from the end.
+async fn open_log(
+    path: &Path,
+    rotated: bool,
+    tx: &mpsc::Sender<LogEvent>,
+) -> Option<BufReader<File>> {
+    let mut reader = match File::open(path) {
+        Ok(f) => BufReader::new(f),
+        Err(e) => {
+            log::warn!("LogWatcher: cannot open log: {e}");
+            return None;
+        }
+    };
+    if rotated {
+        log::info!("LogWatcher: rotation → {}", path.display());
+    } else {
+        log::info!("LogWatcher: opening {}", path.display());
+        if let Some(presence) = scan_last_presence(&mut reader) {
+            log::info!("LogWatcher: initial presence → {presence}");
+            let _ = tx.send(LogEvent::PresenceChanged(presence)).await;
+        }
+        if let Err(e) = reader.seek(SeekFrom::End(0)) {
+            log::warn!("LogWatcher: cannot seek to end: {e}");
+        }
+    }
+    Some(reader)
+}
+
+/// Feed every line available on `reader` through the state machine, leaving the
+/// handle at EOF so the next call resumes exactly where this one stopped.
+async fn drain(
+    reader: &mut BufReader<File>,
+    tx: &mpsc::Sender<LogEvent>,
+    calls: &mut CallState,
+) {
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => process_line(line.trim(), tx, calls).await,
+            Err(e) => {
+                log::warn!("LogWatcher: read error: {e}");
+                break;
             }
         }
     }
@@ -315,7 +421,9 @@ fn find_latest_log() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_call_id, CallState};
+    use super::{drain, extract_call_id, open_log, CallState, LogEvent, STALE_CALL};
+    use std::io::Write;
+    use std::time::{Duration, Instant};
 
     // All lines are verbatim from the Teams logs of 2026-07-30: the end/ring
     // lines from the incident that motivated id-tracking, the active lines
@@ -441,5 +549,95 @@ mod tests {
         assert!(!calls.in_call());
         // A late end-line for the cleared call is ignored.
         assert_eq!(calls.apply(MEETING_ENDED), None);
+    }
+
+    // Instants are only ever moved forward here: `Instant::now() - 13h` panics
+    // on a machine that booted less than 13 hours ago, which is every CI runner.
+    #[test]
+    fn a_call_without_an_end_line_expires() {
+        let t0 = Instant::now();
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply_at(ACTIVE_MEETING, t0), Some(true));
+
+        // Still inside the ceiling: a long meeting is a real meeting.
+        assert_eq!(calls.expire_at(t0 + Duration::from_secs(11 * 3600), STALE_CALL), None);
+        assert!(calls.in_call());
+
+        // Past it: this is the 2026-08-17 pin, and it must end by itself.
+        assert_eq!(calls.expire_at(t0 + Duration::from_secs(13 * 3600), STALE_CALL), Some(false));
+        assert!(!calls.in_call());
+        // Idempotent: no second event once it is gone.
+        assert_eq!(calls.expire_at(t0 + Duration::from_secs(14 * 3600), STALE_CALL), None);
+    }
+
+    #[test]
+    fn an_idless_call_expires_too() {
+        let t0 = Instant::now();
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply_at("NotifyCallActive (new format?)", t0), Some(true));
+        assert_eq!(calls.expire_at(t0 + Duration::from_secs(13 * 3600), STALE_CALL), Some(false));
+    }
+
+    #[test]
+    fn expiring_one_of_two_calls_keeps_the_meeting_running() {
+        let t0 = Instant::now();
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply_at(ACTIVE_MEETING, t0), Some(true));
+        let later = t0 + Duration::from_secs(11 * 3600);
+        assert_eq!(
+            calls.apply_at(
+                "HfpVoipCallCoordinatorImpl: NotifyCallActive callId: c9158e4a-9792-4685-8671-30226038fa77causeId: x",
+                later
+            ),
+            None
+        );
+        // The first call ages out, the second is young: still in a meeting.
+        assert_eq!(calls.expire_at(t0 + Duration::from_secs(13 * 3600), STALE_CALL), None);
+        assert!(calls.in_call());
+    }
+
+    /// Write `lines` to a uniquely named file in the temp dir.
+    fn temp_log(name: &str, lines: &[&str]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("teams2ha-test-{name}.log"));
+        let mut f = std::fs::File::create(&path).expect("create temp log");
+        for line in lines {
+            writeln!(f, "{line}").expect("write temp log");
+        }
+        path
+    }
+
+    // The 2026-08-17 incident: Teams rotates its log every few minutes while a
+    // call runs, and the watcher used to seek to the end of every file it opened
+    // — including a rotated one, discarding the ~40 KB written before it noticed.
+    // A NotifyCallEnded in that window left is_in_meeting pinned on for ten days.
+    #[tokio::test]
+    async fn a_rotated_file_is_read_from_the_start() {
+        let path = temp_log("rotated", &[ACTIVE_MEETING, MEETING_ENDED]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut calls = CallState::default();
+
+        let mut reader = open_log(&path, true, &tx).await.expect("open");
+        drain(&mut reader, &tx, &mut calls).await;
+
+        assert!(matches!(rx.try_recv(), Ok(LogEvent::MeetingChanged(true))));
+        assert!(matches!(rx.try_recv(), Ok(LogEvent::MeetingChanged(false))));
+        assert!(!calls.in_call());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn the_first_file_of_the_run_is_not_replayed() {
+        // Same content, but this file predates the app: replaying it would
+        // announce a meeting that ended before the app was even started.
+        let path = temp_log("first-open", &[ACTIVE_MEETING, MEETING_ENDED]);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        let mut calls = CallState::default();
+
+        let mut reader = open_log(&path, false, &tx).await.expect("open");
+        drain(&mut reader, &tx, &mut calls).await;
+
+        assert!(rx.try_recv().is_err(), "history must not be replayed");
+        assert!(!calls.in_call());
+        let _ = std::fs::remove_file(path);
     }
 }
