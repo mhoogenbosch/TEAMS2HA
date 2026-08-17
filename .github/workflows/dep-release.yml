@@ -28,11 +28,20 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
+      # The token is chosen HERE, not at the push: checkout persists an
+      # `http.https://github.com/.extraheader` credential and that header wins
+      # over any token handed to a later `git push`, so a PAT supplied at push
+      # time is silently ignored (v1.5.2 was pushed that way, authenticated as
+      # GITHUB_TOKEN, and therefore started nothing). With RELEASE_PAT the tag
+      # push carries a real identity and release.yml runs from its push trigger;
+      # without it the push starts nothing and the build must be dispatched —
+      # which then cannot create the release.
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: master
           fetch-depth: 0 # tags and history: the script reads both
+          token: ${{ secrets.RELEASE_PAT || github.token }}
 
       - name: Prepare the version and CHANGELOG
         id: prep
@@ -50,6 +59,13 @@ jobs:
           TAG: ${{ steps.prep.outputs.version }}
         run: |
           set -euo pipefail
+          # A re-run can find the section already on master (the previous attempt
+          # merged it and failed later); there is then nothing to commit, and
+          # `git commit` would abort the whole step.
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG already carries the section for $TAG — going straight to the tag."
+            exit 0
+          fi
           branch="chore/changelog-$TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -99,13 +115,14 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin master
-          git tag "$TAG" origin/master
+          git tag -f "$TAG" origin/master
+          # Authentication comes from the checkout step above, so this one push
+          # covers both cases; only what happens next differs.
+          git push -f origin "$TAG"
           if [ -n "${RELEASE_PAT:-}" ]; then
-            git push "https://x-access-token:${RELEASE_PAT}@github.com/${GITHUB_REPOSITORY}.git" "$TAG"
             echo "dispatch=false" >> "$GITHUB_OUTPUT"
-            echo "Tag pushed with RELEASE_PAT — release.yml runs from the push."
+            echo "Tag pushed as a real identity — release.yml runs from the push."
           else
-            git push origin "$TAG"
             echo "dispatch=true" >> "$GITHUB_OUTPUT"
             echo "::warning::RELEASE_PAT is not set (or expired), so release.yml is dispatched instead and cannot create the release for $TAG. Run 'gh release create $TAG --notes-file <the CHANGELOG section>' and re-run release.yml on that tag, or set the secret."
           fi
