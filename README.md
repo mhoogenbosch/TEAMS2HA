@@ -27,6 +27,7 @@ Microsoft deprecated the Teams **local API**, which broke the classic integratio
 | 💬 **Toasts from HA** | A `notify` entity per machine: `notify.send_message` pops a Windows toast (plain text or JSON `{title, message}`) — reaches you even in headphone meetings. |
 | 🔴 **Tray status dot** | Tray icon shows red while in a meeting, orange while muted, with a matching tooltip. |
 | 🔐 **Hardened & honest** | MQTT password DPAPI-encrypted at rest; TLS never silently downgrades (self-signed brokers supported via *Ignore Cert Errors* — encrypted, unverified, since v1.4.2); CSP on the window; truthful entity types (state-only signals are binary sensors, not fake switches, since **v1.4.0**). |
+| 📊 **Meeting totals** | Since **v1.5.0**: day and week totals for meeting time and meeting count, counted by the app itself in `meeting_stats.json` so a day spent away from home is not lost to Home Detection — see [Meeting totals](#meeting-totals-this-fork). |
 | 🖥️ **UI niceties** | Sensor strip (mic/camera/system-mic/Teams pills), System/Light/Dark theme following Windows live, settings auto-save, version in the window title. |
 | 🧾 **Device `sw_version`** | The installed version is reported in the MQTT discovery device block. |
 | 🗕 **Close-to-tray** | The window close button hides to the tray instead of quitting (keeping the MQTT bridge alive). |
@@ -73,7 +74,7 @@ Published via MQTT discovery under your chosen name:
 
 Each carries an availability topic so HA shows them as `unavailable` when the app is away — except the three totals, which keep their last value (see below).
 
-### Meeting totals (this fork)
+### Meeting totals (this fork, since v1.5.0)
 Because Home Detection pauses MQTT on other networks, a day spent elsewhere would publish nothing and a
 Home Assistant helper measuring how long `isinmeeting` was `on` would read it as zero. The app therefore
 counts meeting time and meetings itself, in `meeting_stats.json` next to the settings file, and publishes
