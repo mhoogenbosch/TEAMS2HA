@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.4] — 2026-08-24 (dependency updates)
+### Dependencies
+- Bump the npm-minor-patch group in /tauri with 2 updates (#38)
+
 ## [v1.5.3] — 2026-08-17 (fixes the startup crash in v1.5.0–v1.5.2)
 ### Fixed
 - **The app starts again.** v1.5.0 introduced the day counters with their one-minute ticker built in Tauri's
@@ -244,6 +248,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.4
 [v1.5.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.3
 [v1.5.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.2
 [v1.5.1]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.1
