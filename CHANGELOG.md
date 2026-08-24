@@ -3,6 +3,31 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.5] — 2026-08-24 (camera state now comes from Teams itself)
+### Changed
+- **The camera sensor now reads Teams' own camera button instead of trusting the registry alone.**
+  `isvideoon` came solely from the Windows Privacy Consent Store, which tracks *physical* camera use: a
+  virtual-camera passthrough (OBS, NVIDIA Broadcast) sitting between the webcam and Teams does not
+  reliably route through the Frame Server capability check that feeds the store, so `LastUsedTimeStop`
+  can sit stuck while video is genuinely on. `uia_monitor` now reads the meeting toolbar's camera button
+  (`Turn camera off` / `Turn camera on`) alongside the mute button it already read, and that reading wins
+  whenever it is available; the registry stays as the fallback for before a meeting window exists. Ported
+  from upstream ([jimmyeao/TEAMS2HA#115](https://github.com/jimmyeao/TEAMS2HA/pull/115) by
+  @broadcasttechie), with one deliberate difference — see below. (NL: de camerasensor leest nu de
+  cameraknop van Teams zelf; de registersleutel blijft alleen nog vangnet.)
+  - Both buttons are searched in one tree walk and cached separately, so adding the camera costs no extra
+    UIA traversal per poll.
+  - A missing camera button reports "no reading" rather than "camera off", so the registry fallback takes
+    over instead of the sensor dropping to off the moment the window disappears.
+  - **Unlike upstream, a camera reading does not start a meeting.** Upstream sets `is_in_meeting` on the
+    first camera event because macOS has no other start signal; on Windows the pre-join screen carries a
+    camera button too, and nothing retracts that — both paths that clear `is_in_meeting` need a signal
+    that never arrives for a call that was never joined. Given this app's history with a stuck
+    `is_in_meeting`, the camera stays a state reading only; the mic key and the log watcher remain the
+    two start signals.
+  - Name-based, like mute: a Teams rename or a non-English UI simply yields no reading, and the registry
+    fallback carries on as before.
+
 ## [v1.5.4] — 2026-08-24 (dependency updates)
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 2 updates (#38)
@@ -248,6 +273,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.5]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.5
 [v1.5.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.4
 [v1.5.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.3
 [v1.5.2]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.2
