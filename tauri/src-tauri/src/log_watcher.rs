@@ -25,6 +25,29 @@ pub enum LogEvent {
 /// declined call ended the running meeting in HA (incident 2026-07-30).
 /// Only ids that were seen active may close the call state, and only when the
 /// last one is gone.
+///
+/// # Why `reportCallAccepted` counts as active
+///
+/// Teams can lose a call inside its own VoIP coordinator and then never write
+/// the `NotifyCall*` pair for it at all. Observed 2026-08-25, when two calls
+/// rang at once: the accepted one logged
+///
+/// ```text
+/// reportCallAccepted for callId: a9ffc76c…
+/// <ERR> reportCallAccepted called, call does not exist, unexpected callId: a9ffc76c…
+/// ```
+///
+/// and, six minutes later, `reportCallEnded` with the same "call does not
+/// exist" error — no `reportIncomingCall`, no `NotifyCallActive`, no
+/// `NotifyCallEnded`. The meeting therefore never registered here, and nothing
+/// downstream (in that case: turning the office speaker down) ever fired.
+///
+/// `reportCallAccepted` closes that gap and is safe as a start marker for the
+/// reason the declined-call fix needs: across a full day of calls it appears
+/// for every *accepted* call and never for the declined one. Where Teams is
+/// behaving it arrives just before `NotifyCallActive`, which makes the start a
+/// second earlier and the second line a no-op. The end side needs no change:
+/// `reportCallEnded` already matches on the `CallEnded` substring.
 #[derive(Default)]
 struct CallState {
     /// Ids seen in a `NotifyCallActive` line, with the moment they were seen —
@@ -56,7 +79,10 @@ impl CallState {
 
     fn apply_at(&mut self, line: &str, now: Instant) -> Option<bool> {
         let was = self.in_call();
-        if line.contains("NotifyCallActive") || line.contains("reportCallActive") {
+        if line.contains("NotifyCallActive")
+            || line.contains("reportCallActive")
+            || line.contains("reportCallAccepted")
+        {
             match extract_call_id(line) {
                 Some(id) => {
                     log::info!("LogWatcher: call active ({id})");
@@ -444,6 +470,22 @@ mod tests {
         "HfpVoipCallCoordinatorImpl: NotifyCallEnded callId: d84becb7-4285-4d44-9d4d-e61364d07d11causeId: a879e043-6006-4daf-add5-d816bc102653";
     const MEETING_ENDED_TRACKER: &str =
         "TeamsCallTracker: CallEnded fired: d84becb7-4285-4d44-9d4d-e61364d07d11";
+    // Verbatim from 2026-08-25, the call Teams lost inside its own coordinator:
+    // accepted and ended, with no reportIncomingCall and no NotifyCall* pair.
+    const LOST_ACCEPTED: &str =
+        "HfpVoipCallCoordinatorImpl: reportCallAccepted for callId: a9ffc76c-1a94-427e-bdb3-ad8601f97232";
+    const LOST_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: reportCallEnded for callId: a9ffc76c-1a94-427e-bdb3-ad8601f97232causeId: c684a115-81ab-4a4a-903f-7f1e0b2c4d5a";
+    // The same log's declined call: it rang and timed out, and — the reason
+    // reportCallAccepted is safe to trust — it has no accepted-line at all.
+    const DECLINED_RING: &str =
+        "HfpVoipCallCoordinatorImpl: reportIncomingCall for callId: 88f6048b-26ea-4d66-82a0-445b24d1933f";
+    const DECLINED_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallEnded callId: 88f6048b-26ea-4d66-82a0-445b24d1933fcauseId: 50b47384-588f-4c10-8bec-0846e308868d";
+    // And an accepted line for a call Teams did *not* lose, so the pair
+    // reportCallAccepted → NotifyCallActive can be replayed in order.
+    const ACCEPTED_MEETING: &str =
+        "HfpVoipCallCoordinatorImpl: reportCallAccepted for callId: d84becb7-4285-4d44-9d4d-e61364d07d11";
 
     #[test]
     fn extracts_guid_glued_to_cause_id() {
@@ -549,6 +591,46 @@ mod tests {
         assert!(!calls.in_call());
         // A late end-line for the cleared call is ignored.
         assert_eq!(calls.apply(MEETING_ENDED), None);
+    }
+
+    // The 2026-08-25 incident: two calls rang at once, and the one that was
+    // accepted was lost inside Teams' own VoIP coordinator — it logged
+    // reportCallAccepted and, six minutes later, reportCallEnded, each followed
+    // by Teams' own "call does not exist" error, and never a NotifyCall* line.
+    // Before reportCallAccepted was trusted, that call registered as no meeting
+    // at all and the office speaker was never turned down.
+    #[test]
+    fn a_call_teams_lost_still_starts_and_ends_the_meeting() {
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(LOST_ACCEPTED), Some(true));
+        assert!(calls.in_call());
+        assert_eq!(calls.apply(LOST_ENDED), Some(false));
+        assert!(!calls.in_call());
+    }
+
+    #[test]
+    fn an_accepted_line_before_the_active_line_is_not_a_second_call() {
+        // The healthy ordering: Teams writes reportCallAccepted just before
+        // NotifyCallActive for the same id. The second line must be a no-op,
+        // and one end-line must still close the meeting.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(ACCEPTED_MEETING), Some(true));
+        assert_eq!(calls.apply(ACTIVE_MEETING), None);
+        assert_eq!(calls.apply(MEETING_ENDED), Some(false));
+    }
+
+    #[test]
+    fn a_declined_call_has_no_accepted_line_to_go_on() {
+        // Why trusting reportCallAccepted does not undo the 2026-07-30 fix:
+        // ringing and timing out produces no accepted-line, so a declined call
+        // still cannot start a meeting — nor end the one that is running.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(DECLINED_RING), None);
+        assert!(!calls.in_call());
+
+        assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
+        assert_eq!(calls.apply(DECLINED_ENDED), None);
+        assert!(calls.in_call(), "the declined call must not end the meeting");
     }
 
     // Instants are only ever moved forward here: `Instant::now() - 13h` panics
