@@ -3,6 +3,27 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.6] — 2026-08-25 (a call Teams loses track of is now still a meeting)
+### Fixed
+- **A call that Teams loses inside its own VoIP coordinator now registers as a meeting.** Teams can drop a
+  call from its own call tracker and then never write the `NotifyCall*` pair for it at all — which is the
+  only pair `log_watcher` watched, so such a call produced no meeting at all: `isinmeeting` stayed off for
+  its whole duration, and everything downstream (turning the office speaker down) never fired.
+  `reportCallAccepted` is now trusted as a call-active marker alongside `NotifyCallActive` and
+  `reportCallActive`. (NL: neemt Teams een gesprek aan maar raakt het intern kwijt, dan ziet de app het nu
+  alsnog als meeting.)
+  - Observed 2026-08-25 with two calls ringing at once. The accepted call logged `reportCallAccepted`, then
+    `reportCallEnded` six minutes later, each followed by Teams' own
+    `<ERR> … call does not exist, unexpected callId` — and no `reportIncomingCall`, no `NotifyCallActive`,
+    no `NotifyCallEnded`. Teams appears to lose the second of two concurrent calls while the first one's
+    incoming-report is still in flight.
+  - Safe against the declined-call regression that motivated id tracking in v1.4.3: over a full day of
+    calls, `reportCallAccepted` appears for every accepted call and never for the declined one, so a
+    declined call still cannot start a meeting or end a running one. Three tests pin exactly that.
+  - Where Teams is behaving, `reportCallAccepted` arrives just before `NotifyCallActive` for the same id.
+    That makes the meeting start about a second earlier and turns the `NotifyCallActive` line into a no-op.
+  - No change needed on the end side: `reportCallEnded` already matches on the `CallEnded` substring.
+
 ## [v1.5.5] — 2026-08-24 (camera state now comes from Teams itself)
 ### Changed
 - **The camera sensor now reads Teams' own camera button instead of trusting the registry alone.**
@@ -273,6 +294,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.6]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.6
 [v1.5.5]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.5
 [v1.5.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.4
 [v1.5.3]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.3
