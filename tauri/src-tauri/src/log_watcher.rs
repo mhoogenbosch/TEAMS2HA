@@ -738,7 +738,7 @@ mod tests {
         assert!(calls.in_call());
     }
 
-    /// Write `lines` to a uniquely named file in the temp dir.
+    /// Write `lines` to a temp file in the temp dir.
     fn temp_log(name: &str, lines: &[&str]) -> std::path::PathBuf {
         use std::io::Write;
         let path = std::env::temp_dir().join(format!("teams2ha-test-{name}.log"));
