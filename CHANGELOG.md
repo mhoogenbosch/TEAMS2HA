@@ -3,6 +3,21 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.7] — 2026-08-30 (no more rustls in the build — clears four Dependabot alerts)
+### Security
+- **`rumqttc` no longer pulls in rustls.** The MQTT client is used with `use-native-tls` (Windows SChannel),
+  but `rumqttc`'s *default* feature `use-rustls` was still enabled, so a complete second TLS stack — `rustls`,
+  `rustls-webpki` 0.102.8, `aws-lc-rs`/`aws-lc-sys` and the `cmake` build of the latter — was compiled into the
+  app without ever being used. `default-features = false` drops it. This clears all four open Dependabot alerts
+  on `rustls-webpki` 0.102 (one high: DoS via a malformed CRL BIT STRING), which `rumqttc` 0.25.1 pins at
+  `^0.102.8` and therefore could not be bumped in place. (NL: de ongebruikte tweede TLS-stack is uit de build;
+  vier Dependabot-meldingen vervallen.)
+  - Nothing changes at runtime: every code path already used `TlsConfiguration::Native`.
+  - Smaller and faster build: the `aws-lc-sys` C compilation is gone.
+- The remaining alert (`glib` 0.18 via Tauri's Linux GTK stack) is dismissed as *not used*: those crates are
+  `cfg`-gated to Linux and never compiled in the Windows-only build; `glib` 0.20 needs a GTK bump Tauri 2.x
+  has not made.
+
 ## [v1.5.6] — 2026-08-25 (a call Teams loses track of is now still a meeting)
 ### Fixed
 - **A call that Teams loses inside its own VoIP coordinator now registers as a meeting.** Teams can drop a

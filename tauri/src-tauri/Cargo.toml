@@ -18,7 +18,7 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-rumqttc = { version = "0.25", features = ["use-native-tls", "websocket"] }
+rumqttc = { version = "0.25", default-features = false, features = ["use-native-tls", "websocket"] }
 winreg = "0.56"
 notify = "8"
 directories = "6"
