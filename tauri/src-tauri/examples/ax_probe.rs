@@ -18,12 +18,20 @@
 //! (VoiceOver's) sped it up when tried against a real call; it just needs patience — the
 //! regular 750ms poll in `uia_monitor` picks it up on its own once Chromium finishes.
 
+//! Everything below is gated to macOS: `axuielement` and `libproc` are macOS-only
+//! dependencies, and `cargo clippy --all-targets` builds examples on every platform, so
+//! without the gate this file fails to resolve its imports on the Windows runner.
+
+#[cfg(target_os = "macos")]
 use axuielement::ax_attribute::attributes::{
     AX_DESCRIPTION_ATTRIBUTE, AX_ROLE_ATTRIBUTE, AX_TITLE_ATTRIBUTE, AX_WINDOWS_ATTRIBUTE,
 };
+#[cfg(target_os = "macos")]
 use axuielement::AXUIElement;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 fn teams_pid() -> Option<u32> {
     use libproc::proc_pid::{pidpath, ProcType};
 
@@ -37,6 +45,7 @@ fn teams_pid() -> Option<u32> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn walk(el: &AXUIElement, depth: u32) {
     if depth > 40 {
         return;
@@ -71,6 +80,7 @@ fn walk(el: &AXUIElement, depth: u32) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn main() {
     let Some(pid) = teams_pid() else {
         println!("Microsoft Teams not found running.");
@@ -100,4 +110,9 @@ fn main() {
         }
         std::thread::sleep(Duration::from_secs(3));
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("ax_probe is a macOS-only diagnostic; there is nothing to probe here.");
 }

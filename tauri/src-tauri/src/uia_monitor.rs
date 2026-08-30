@@ -63,6 +63,13 @@ pub enum UiaEvent {
     /// in `poll_blocking` (not just "both `Unknown` this poll") because a backgrounded Teams
     /// window can make Chromium briefly skip AX-tree upkeep, which must not be mistaken for
     /// the call having ended.
+    ///
+    /// Only ever constructed by the macOS `poll_blocking`, while `handle_uia_event` matches
+    /// it on every platform to keep that match exhaustive — so on Windows this is a variant
+    /// that is matched but never built, which `-D warnings` rejects as dead code. Silenced
+    /// rather than `cfg`-gated: gating the variant would mean gating its match arm too, and
+    /// the arm is what documents the macOS behaviour.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     MeetingEnded,
 }
 
