@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.7] — 2026-08-31 (dependency updates)
+### Dependencies
+- Bump eslint in /tauri in the npm-minor-patch group (#42)
+
 ## [v1.5.6] — 2026-08-25 (a call Teams loses track of is now still a meeting)
 ### Fixed
 - **A call that Teams loses inside its own VoIP coordinator now registers as a meeting.** Teams can drop a
@@ -294,6 +298,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.7]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.7
 [v1.5.6]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.6
 [v1.5.5]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.5
 [v1.5.4]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.4
