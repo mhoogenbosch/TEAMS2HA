@@ -13,6 +13,29 @@ const RELEASES_URL = "https://github.com/mhoogenbosch/TEAMS2HA/releases";
 // which is invisible when the app sits hidden in the tray.
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
+// The window is surfaced at most ONCE per offered version. Every hourly check —
+// plus the catch-up tick right after a resume — used to show()+focus() the window
+// again for the same version, so anyone who closed it with X got it back in their
+// face an hour later (or on every wake from standby). The update stays visible in
+// the card; it just stops demanding attention. Field report 2026-08-31.
+const NOTICE_KEY = "updateNoticeShownFor";
+
+function alreadyNoticed(version) {
+  try {
+    return localStorage.getItem(NOTICE_KEY) === version;
+  } catch {
+    return false;
+  }
+}
+
+function markNoticed(version) {
+  try {
+    localStorage.setItem(NOTICE_KEY, version);
+  } catch {
+    // storage unavailable: worst case we nag like before
+  }
+}
+
 export default function UpdaterCard() {
   const [current, setCurrent] = useState("");
   // idle | checking | uptodate | available | downloading | installing | error
@@ -31,8 +54,10 @@ export default function UpdaterCard() {
       if (u) {
         setUpdate(u);
         setStatus("available");
-        if (background) {
-          // Found by a scheduled check: surface the window so it gets noticed.
+        if (background && !alreadyNoticed(u.version)) {
+          // Found by a scheduled check: surface the window once so it gets
+          // noticed. Repeat checks for the same version stay quiet.
+          markNoticed(u.version);
           try {
             const w = getCurrentWindow();
             await w.show();

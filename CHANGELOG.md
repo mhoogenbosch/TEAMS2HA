@@ -3,6 +3,16 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.9] — 2026-08-31 (an available update surfaces the window once, not every hour)
+### Fixed
+- **The window kept popping to the foreground while an update was pending.** The hourly update check —
+  and its catch-up tick right after a resume from standby — called `show()`/`setFocus()` on *every* check
+  that found an update, so closing the window with X only helped until the next check or wake. The window
+  is now surfaced at most **once per offered version**; the update stays visible in the updater card and
+  the check keeps running, it just stops demanding attention. A newer version notifies once again. (NL: het
+  venster sprong bij elke uurlijkse check en elke standby-wake naar de voorgrond zolang er een update
+  klaarstond; nu nog één keer per aangeboden versie.)
+
 ## [v1.5.8] — 2026-08-31 (dependency updates)
 ### Dependencies
 - Bump log in /tauri/src-tauri in the cargo-minor-patch group (#43)
