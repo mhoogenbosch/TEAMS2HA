@@ -105,7 +105,10 @@ export default function UpdaterCard() {
             break;
         }
       });
-      await relaunch();
+      // On Windows the updater already exits the app and the NSIS installer
+      // relaunches it by itself — calling relaunch() as well raced a second
+      // instance (two tray icons, 2026-08-31). Only non-Windows needs it.
+      if (!navigator.userAgent.includes("Windows")) await relaunch();
     } catch (e) {
       busyRef.current = false;
       setStatus("error");

@@ -225,6 +225,15 @@ pub fn run() {
     init_logging();
 
     tauri::Builder::default()
+        // MUST be the first plugin (per its docs): any second launch of the app exits
+        // immediately and this callback runs in the surviving instance. Deliberately a
+        // no-op — do NOT show/focus the window here: the common duplicate source is the
+        // Windows auto-update relaunch race (installer relaunch + our relaunch(), two
+        // tray icons on 2026-08-31) and popping the window on update would reintroduce
+        // exactly what v1.5.9 fixed.
+        .plugin(tauri_plugin_single_instance::init(|_app, _argv, _cwd| {
+            log::info!("second instance launch suppressed (single-instance)");
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
