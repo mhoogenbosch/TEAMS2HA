@@ -14,6 +14,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
   klaarstond; nu nog één keer per aangeboden versie.)
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 4 updates (#48)
+- Bump the cargo-minor-patch group (#49)
 
 ## [v1.5.8] — 2026-08-31 (dependency updates)
 ### Dependencies
