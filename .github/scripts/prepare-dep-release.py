@@ -160,6 +160,21 @@ def main() -> int:
         ]
     else:
         # Unreleased section on master: release it, with the bumps folded in.
+        # But NEVER re-release a version that is already tagged: that happened on
+        # 2026-09-07, when a missing CHANGELOG section for the newest tag made the
+        # top section (v1.5.9, long since released) look unreleased — the tag was
+        # then force-moved and the published assets overwritten. A tagged top
+        # section means the CHANGELOG is behind, and the fix is a missing section,
+        # not a re-tag.
+        if git("tag", "--list", top_version):
+            print(
+                f"::error::{CHANGELOG}'s newest section {top_version} is already "
+                f"tagged while the newest tag is {tag} — a CHANGELOG section for "
+                f"{tag} is missing. Refusing to re-release {top_version}; add the "
+                "missing section(s) first."
+            )
+            emit(release="false")
+            return 1
         version = top_version
         dated = SECTION_DATE.match(lines[top])
         if dated:
