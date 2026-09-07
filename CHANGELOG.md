@@ -3,7 +3,7 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
-## [v1.5.9] — 2026-08-31 (an available update surfaces the window once, not every hour)
+## [v1.5.9] — 2026-09-07 (an available update surfaces the window once, not every hour)
 ### Fixed
 - **The window kept popping to the foreground while an update was pending.** The hourly update check —
   and its catch-up tick right after a resume from standby — called `show()`/`setFocus()` on *every* check
@@ -12,6 +12,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
   the check keeps running, it just stops demanding attention. A newer version notifies once again. (NL: het
   venster sprong bij elke uurlijkse check en elke standby-wake naar de voorgrond zolang er een update
   klaarstond; nu nog één keer per aangeboden versie.)
+### Dependencies
+- Bump the npm-minor-patch group in /tauri with 4 updates (#48)
 
 ## [v1.5.8] — 2026-08-31 (dependency updates)
 ### Dependencies
@@ -312,6 +314,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.9]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.9
 [v1.5.8]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.8
 [v1.5.7]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.7
 [v1.5.6]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.6
