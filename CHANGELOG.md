@@ -7,6 +7,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 4 updates (#52)
 
+## [v1.5.12] — 2026-09-22 (security: rustls)
+### Security
+- **rustls 0.23.41 → 0.23.45** (with rustls-webpki and aws-lc-rs/-sys bumps): fixes
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285) — TLS 1.3 handshake messages
+  incorrectly accepted across encryption level boundaries (severity 5.3, medium). Relevant here because
+  the MQTT-over-WSS connection runs on rustls. Lockfile-only change; flagged by the scheduled Rust
+  Security Audit on 2026-09-21.
+
 ## [v1.5.11] — 2026-09-07 (dependency updates)
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 4 updates (#48)
