@@ -3,6 +3,17 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.17] — 2026-10-07 (MQTT over WSS)
+### Fixed
+- **MQTT over WebSockets + TLS (WSS) could not connect.** The WSS path in rumqttc only accepts a
+  rustls-backed `TlsConfiguration`, but the app passed it the native-tls one (or the native-tls
+  permissive config with "Ignore certificate errors"). WSS now gets a rustls config — the platform
+  default, or a no-verify verifier when certificate errors are ignored (logged as a warning) — and
+  the ring crypto provider is installed if none is set. With WebSockets on, the broker address is
+  normalised to `ws[s]://host:port/mqtt` (scheme, port and path added when missing; a pasted
+  `user@`/scheme prefix is stripped). Plain TCP and TLS-over-TCP are unchanged. Port of upstream
+  [jimmyeao#132](https://github.com/jimmyeao/TEAMS2HA/pull/132), including its unit tests.
+
 ## [v1.5.16] — 2026-10-05 (dependency updates)
 ### Dependencies
 - Bump the cargo-minor-patch group (#60)
