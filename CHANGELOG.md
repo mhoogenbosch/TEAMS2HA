@@ -3,6 +3,19 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.18] — 2026-10-08 (process priority)
+### Fixed
+- **The app could run at below-normal priority and stall under load.** Task Scheduler starts
+  tasks at priority 7 (`BELOW_NORMAL_PRIORITY_CLASS`) unless told otherwise, and that class is
+  inherited: the watchdog task launched the app via wscript -> powershell -> teams2ha, and the
+  NSIS auto-update relaunch inherited it again. On a memory-starved laptop (16 GB, ~1 GB free,
+  the process mostly paged out) the app was not scheduled for ~60 s during a Teams call: no MQTT
+  keepalive went out, the broker published the Last Will and Home Assistant saw every entity
+  `unavailable` for 22 s mid-meeting — enough to trip "laptop off" automations. The app now
+  raises its own priority class to `NORMAL_PRIORITY_CLASS` at startup when it finds itself at
+  below-normal or idle (logged at info); a higher class is left alone. Also set `<Priority>4</Priority>`
+  on the watchdog task if you use one.
+
 ## [v1.5.17] — 2026-10-07 (MQTT over WSS)
 ### Fixed
 - **MQTT over WebSockets + TLS (WSS) could not connect.** The WSS path in rumqttc only accepts a
@@ -364,6 +377,8 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.18]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.18
+[v1.5.17]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.17
 [v1.5.16]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.16
 [v1.5.15]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.15
 [v1.5.14]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.14

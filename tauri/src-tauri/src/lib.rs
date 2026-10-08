@@ -181,6 +181,44 @@ async fn get_state(shared: State<'_, SharedState>) -> Result<MeetingState, Strin
 /// level `info` — env_logger's default of errors-only left us blind on 13-07-2026
 /// when the MQTT connection silently never came back after a Modern Standby resume.
 /// RUST_LOG still overrides the level.
+/// Make sure the process does not run below normal priority.
+///
+/// Task Scheduler starts tasks at priority 7 = `BELOW_NORMAL_PRIORITY_CLASS`
+/// unless told otherwise, and a process inherits the class of its parent: the
+/// watchdog task launches the app through wscript -> powershell -> teams2ha,
+/// and the NSIS auto-update relaunch inherits it again. On 2026-10-08 the app
+/// (BelowNormal, mostly paged out on a memory-starved laptop) was not scheduled
+/// for ~60 s during a call: no MQTT keepalive, the broker published the Last
+/// Will and HA saw every entity `unavailable` for 22 s mid-meeting. Only ever
+/// raises; an explicitly higher class is left alone.
+#[cfg(windows)]
+fn ensure_normal_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, GetPriorityClass, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS,
+        IDLE_PRIORITY_CLASS, NORMAL_PRIORITY_CLASS,
+    };
+
+    // SAFETY: the pseudo-handle from GetCurrentProcess is always valid and
+    // must not be closed; both calls only touch this process' own class.
+    unsafe {
+        let process = GetCurrentProcess();
+        let current = GetPriorityClass(process);
+        if current == BELOW_NORMAL_PRIORITY_CLASS.0 || current == IDLE_PRIORITY_CLASS.0 {
+            match SetPriorityClass(process, NORMAL_PRIORITY_CLASS) {
+                Ok(()) => log::info!(
+                    "Process priority class raised from {current:#x} to NORMAL_PRIORITY_CLASS"
+                ),
+                Err(e) => log::warn!("Could not raise process priority class: {e}"),
+            }
+        } else {
+            log::debug!("Process priority class {current:#x} left unchanged");
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn ensure_normal_priority() {}
+
 fn init_logging() {
     use env_logger::{Builder, Env, Target};
     let mut builder = Builder::from_env(Env::default().default_filter_or("info"));
@@ -223,6 +261,7 @@ fn init_logging() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_logging();
+    ensure_normal_priority();
 
     tauri::Builder::default()
         // MUST be the first plugin (per its docs): any second launch of the app exits
