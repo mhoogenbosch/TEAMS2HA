@@ -3,6 +3,11 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.19] — 2026-10-11 (dependency updates)
+### Dependencies
+- Bump source-map-js from 1.2.1 to 1.2.2 in /tauri (#66)
+- Bump brace-expansion from 5.0.7 to 5.0.12 in /tauri (#62)
+
 ## [v1.5.18] — 2026-10-08 (process priority)
 ### Fixed
 - **The app could run at below-normal priority and stall under load.** Task Scheduler starts
@@ -377,6 +382,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.19]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.19
 [v1.5.18]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.18
 [v1.5.17]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.17
 [v1.5.16]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.16
