@@ -70,6 +70,14 @@ jobs:
       # A major bump anywhere in that list (grouped PRs list several) means the
       # PR is left open for review. Read from the commit rather than the PR
       # title, which is free text.
+      #
+      # Security updates are the exception: Dependabot opens them outside the
+      # weekly groups, one dependency per PR, and their trailer carries no
+      # `update-type` at all (only `dependency-type: indirect` and the like).
+      # #62 (brace-expansion 5.0.7 → 5.0.12) sat open for a week because of
+      # that. For those the update type is derived from the title, which
+      # Dependabot always writes as "bump <name> from X to Y": same major =
+      # minor/patch, merge; different major, or no such title, stay open.
       - name: Refuse major updates
         id: gate
         if: steps.pr.outputs.found == 'true'
@@ -77,7 +85,22 @@ jobs:
           set -euo pipefail
           message=$(gh api "repos/$REPO/commits/$HEAD_SHA" --jq '.commit.message')
           if ! grep -q 'update-type: version-update:semver-' <<<"$message"; then
-            echo "::warning::No update-type trailer on $HEAD_SHA — refusing to auto-merge."
+            title=$(gh pr view "${{ steps.pr.outputs.number }}" --repo "$REPO" --json title --jq '.title')
+            # "from X to Y" with an optional v prefix and pre-release suffix on X; kept in a
+            # variable because a bracket expression with a space does not parse inline in [[ =~ ]]
+            from_to='from v?([0-9]+)\.[0-9]+(\.[0-9]+)?[^ ]* to v?([0-9]+)\.[0-9]+(\.[0-9]+)?'
+            if [[ "$title" =~ $from_to ]]; then
+              from_major="${BASH_REMATCH[1]}"; to_major="${BASH_REMATCH[3]}"
+              if [ "$from_major" = "$to_major" ]; then
+                echo "No update-type trailer (security update?); title says $from_major.x → $to_major.x — treating as minor/patch."
+                echo "proceed=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              echo "No update-type trailer; title says major $from_major → $to_major — leaving #${{ steps.pr.outputs.number }} open for manual review."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::No update-type trailer on $HEAD_SHA and no 'from X to Y' in the title — refusing to auto-merge."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
