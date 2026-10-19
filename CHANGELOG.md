@@ -3,9 +3,21 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
-## [v1.5.21] — 2026-10-19 (dependency updates)
+## [v1.5.22] — 2026-10-19 (security + dependency updates)
+### Security
+- **rustls 0.23.45 → 0.23.46** (RUSTSEC-2026-0346, -0347, -0348, -0349: TLS secrets in `Debug` output,
+  data sent after an ECH rejection, unbounded Brotli certificate decompression, and a ServerHello
+  downgrade to classical key exchange). rustls is used for MQTT over TLS/WSS and the updater's HTTPS.
+- `cargo audit` now ignores RUSTSEC-2026-0367/0368/0369 (zip 4.6.1 via tauri-plugin-updater): Unix-only
+  extraction issues that do not apply to this Windows build, which only unpacks its own signed updates.
+
+## [v1.5.21] — 2026-10-19 (dependency updates) — not released
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 6 updates (#72)
+
+The build failed: #72 moved `@tauri-apps/plugin-updater` to 2.14.0 while the matching Rust crate
+(`tauri-plugin-updater`, in #73) was still on 2.13.2, and Tauri refuses mismatched minor versions.
+#73 was held back by the rustls/zip advisories above. These changes ship in v1.5.22.
 
 ## [v1.5.20] — 2026-10-12 (dependency updates)
 ### Dependencies

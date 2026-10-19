@@ -37,6 +37,12 @@ jobs:
         #    available). It only parses toast XML this app generates itself, so the
         #    DoS-via-malicious-XML vector doesn't apply. The other quick-xml copy
         #    (build-time, via plist) is already bumped to the patched 0.41.0.
+        #  - RUSTSEC-2026-0367/0368/0369: zip 4.6.1, pulled via tauri-plugin-updater
+        #    (2.14.0 still requires zip ^4; the fix is zip >=9). All three are about
+        #    Unix extraction: SUID/SGID bits kept, symlinks pointing outside the
+        #    target, and permissions applied through symlinks. This app is a
+        #    Windows-only build and the updater only unpacks our own signed update
+        #    packages, so none of them is reachable. (19-10-2026)
         #
         # Un-ignore each once the upstream chain drops its old constraint.
         run: >
@@ -47,6 +53,9 @@ jobs:
           --ignore RUSTSEC-2026-0104
           --ignore RUSTSEC-2026-0194
           --ignore RUSTSEC-2026-0195
+          --ignore RUSTSEC-2026-0367
+          --ignore RUSTSEC-2026-0368
+          --ignore RUSTSEC-2026-0369
 
   clippy:
     name: cargo clippy
