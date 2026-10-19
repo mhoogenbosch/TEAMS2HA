@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.21] — 2026-10-19 (dependency updates)
+### Dependencies
+- Bump the npm-minor-patch group in /tauri with 6 updates (#72)
+
 ## [v1.5.20] — 2026-10-12 (dependency updates)
 ### Dependencies
 - Bump the cargo-minor-patch group (#69)
@@ -386,6 +390,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.21]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.21
 [v1.5.20]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.20
 [v1.5.19]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.19
 [v1.5.18]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.18
