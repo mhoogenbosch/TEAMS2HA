@@ -14,6 +14,7 @@ Two cases:
   version, because a build of master ships those changes either way.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -123,6 +124,42 @@ def add_link(lines: list[str], version: str) -> None:
     lines.extend(["", link])
 
 
+def tauri_mismatches() -> list[str]:
+    """Tauri pairs whose npm package and Rust crate differ in major.minor.
+
+    `tauri build` refuses such a pair ("Found version mismatched Tauri packages").
+    The npm and cargo groups arrive as separate Dependabot pull requests, so after
+    one of them merges, master can briefly hold e.g. @tauri-apps/plugin-updater
+    2.14 next to tauri-plugin-updater 2.13. Releasing then tags a version whose
+    build is certain to fail: v1.5.21 on 2026-10-19. Waiting is enough, because
+    the other group's merge dispatches this workflow again.
+    """
+    try:
+        lock = json.load(open("tauri/package-lock.json", encoding="utf-8"))
+        cargo = open("tauri/src-tauri/Cargo.lock", encoding="utf-8").read()
+    except OSError as err:
+        print(f"::warning::Tauri version check skipped: {err}")
+        return []
+    npm = {
+        path.removeprefix("node_modules/@tauri-apps/"): meta.get("version", "")
+        for path, meta in lock.get("packages", {}).items()
+        if path.startswith("node_modules/@tauri-apps/") and path.count("node_modules/") == 1
+    }
+    crates = dict(re.findall(r'\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"', cargo))
+
+    def minor(version: str) -> str:
+        return ".".join(version.split(".")[:2])
+
+    pairs = {"api": "tauri"} | {
+        name: f"tauri-{name}" for name in npm if name.startswith("plugin-")
+    }
+    return [
+        f"{crate} ({crates[crate]}) : @tauri-apps/{name} ({npm[name]})"
+        for name, crate in sorted(pairs.items())
+        if name in npm and crate in crates and minor(npm[name]) != minor(crates[crate])
+    ]
+
+
 def main() -> int:
     tag = latest_tag()
     if tag is None:
@@ -133,6 +170,15 @@ def main() -> int:
     bullets, others = dependency_bullets(commit_subjects(tag))
     if not bullets:
         print(f"No dependency commits since {tag} — nothing to release.")
+        emit(release="false")
+        return 0
+
+    mismatched = tauri_mismatches()
+    if mismatched:
+        for pair in mismatched:
+            print(f"::notice::Waiting for the matching bump: {pair}")
+        print("Not releasing yet: the npm and Rust sides of Tauri differ in major.minor, so the "
+              "build would fail. The other ecosystem's Dependabot merge will start this again.")
         emit(release="false")
         return 0
 

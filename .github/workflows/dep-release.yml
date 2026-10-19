@@ -82,6 +82,26 @@ jobs:
               --title "CHANGELOG: finalize $TAG (dependency updates)" \
               --body "Opened by the Dependency release workflow: the CHANGELOG section for \`$TAG\`, which is tagged as soon as this lands."
           fi
+          # Let the pull request's own checks finish before merging. Merging within
+          # seconds of opening it closed the PR while CI and CodeQL were still being
+          # started on it, so both failed with "workflow file issue" (the PR's merge
+          # ref was already gone) and mailed a failure every release, v1.5.19-v1.5.22.
+          # Waiting also means a genuinely failing check stops the release here.
+          # `gh pr checks` exits 0 when all passed, 8 while pending, and 1 both on a
+          # failure and while no checks are reported yet; wait up to 3 min for them.
+          checks=none
+          for attempt in $(seq 1 18); do
+            rc=0
+            out=$(gh pr checks "$branch" 2>&1) || rc=$?
+            if [ "$rc" = 0 ] || [ "$rc" = 8 ]; then checks=present; break; fi
+            if [ "$rc" = 1 ] && ! grep -qi "no checks reported" <<<"$out"; then checks=present; break; fi
+            sleep 10
+          done
+          if [ "$checks" = present ]; then
+            gh pr checks "$branch" --watch --fail-fast --interval 20
+          else
+            echo "No checks reported on $branch after 3 min — merging without waiting."
+          fi
           # A freshly opened pull request reports its mergeability asynchronously,
           # so the first attempt can legitimately come back "not mergeable".
           for attempt in 1 2 3 4 5; do
