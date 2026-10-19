@@ -10,6 +10,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). 
   downgrade to classical key exchange). rustls is used for MQTT over TLS/WSS and the updater's HTTPS.
 - `cargo audit` now ignores RUSTSEC-2026-0367/0368/0369 (zip 4.6.1 via tauri-plugin-updater): Unix-only
   extraction issues that do not apply to this Windows build, which only unpacks its own signed updates.
+### Dependencies
+- Bump the cargo-minor-patch group across 1 directory with 7 updates (#73)
 
 ## [v1.5.21] — 2026-10-19 (dependency updates) — not released
 ### Dependencies
@@ -402,6 +404,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.22]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.22
 [v1.5.21]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.21
 [v1.5.20]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.20
 [v1.5.19]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.19
