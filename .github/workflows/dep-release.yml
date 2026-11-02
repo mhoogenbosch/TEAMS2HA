@@ -47,16 +47,23 @@ jobs:
         id: prep
         run: python3 .github/scripts/prepare-dep-release.py
 
-      # master requires that changes arrive through a pull request, and the bot
-      # is no admin, so it cannot bypass that the way a maintainer can — a plain
-      # `git push origin HEAD:master` is rejected. It can open and merge its own
-      # pull request though: the rule asks for a pull request, not for a human
-      # approval (0 reviews required). The tag then points at the squashed
-      # commit on master.
-      - name: Commit the CHANGELOG through a pull request
+      # master requires that changes arrive through a pull request. With
+      # RELEASE_PAT the push carries the maintainer's identity, and the maintainer
+      # may bypass that rule (enforce_admins is off), so the commit goes straight
+      # to master. The pull request is the fallback for the GITHUB_TOKEN path:
+      # the bot is no admin, but it may open and merge its own pull request
+      # (0 reviews required). Either way the tag points at the CHANGELOG commit.
+      #
+      # Why not always the pull request: one opened with GITHUB_TOKEN gets CI and
+      # CodeQL runs that never receive a job, because events from GITHUB_TOKEN
+      # start no workflows. When the pull request closes they fail with "workflow
+      # file issue", which mailed two failures per release from v1.5.19 to
+      # v1.5.24. Waiting for the pull request's checks first changed nothing.
+      - name: Commit the CHANGELOG
         if: steps.prep.outputs.release == 'true'
         env:
           TAG: ${{ steps.prep.outputs.version }}
+          RELEASE_PAT: ${{ secrets.RELEASE_PAT }}
         run: |
           set -euo pipefail
           # A re-run can find the section already on master (the previous attempt
@@ -66,11 +73,20 @@ jobs:
             echo "CHANGELOG already carries the section for $TAG — going straight to the tag."
             exit 0
           fi
-          branch="chore/changelog-$TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$branch"
           git commit -m "CHANGELOG: finalize $TAG (dependency updates)" CHANGELOG.md
+          # Authentication comes from the checkout step, so with RELEASE_PAT set
+          # this push is the maintainer's.
+          if [ -n "${RELEASE_PAT:-}" ]; then
+            if git push origin HEAD:master; then
+              echo "CHANGELOG for $TAG pushed to master."
+              exit 0
+            fi
+            echo "::warning::Pushing the CHANGELOG to master was refused, so it goes through a pull request; its CI and CodeQL runs will fail with 'workflow file issue'."
+          fi
+          branch="chore/changelog-$TAG"
+          git checkout -b "$branch"
           # Force and reuse, so a re-run after a failed attempt picks up where it
           # left off instead of tripping over its own leftovers: the branch and
           # the pull request may both already exist from the previous try.
@@ -82,11 +98,10 @@ jobs:
               --title "CHANGELOG: finalize $TAG (dependency updates)" \
               --body "Opened by the Dependency release workflow: the CHANGELOG section for \`$TAG\`, which is tagged as soon as this lands."
           fi
-          # Let the pull request's own checks finish before merging. Merging within
-          # seconds of opening it closed the PR while CI and CodeQL were still being
-          # started on it, so both failed with "workflow file issue" (the PR's merge
-          # ref was already gone) and mailed a failure every release, v1.5.19-v1.5.22.
-          # Waiting also means a genuinely failing check stops the release here.
+          # Let the checks that do run on the branch finish before merging, so a
+          # genuinely failing check stops the release here. Those are the push runs
+          # when the branch was pushed with RELEASE_PAT; with GITHUB_TOKEN there are
+          # none, and the loop below gives up after 3 min.
           # `gh pr checks` exits 0 when all passed, 8 while pending, and 1 both on a
           # failure and while no checks are reported yet; wait up to 3 min for them.
           checks=none
