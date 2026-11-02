@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.26] — 2026-11-02 (dependency updates)
+### Dependencies
+- Bump the cargo-minor-patch group across 1 directory with 4 updates (#86)
+
 ## [v1.5.25] — 2026-11-02 (security + dependency updates)
 ### Security
 - **rustls-webpki 0.103.15 → 0.103.16** and **webpki-root-certs 1.0.9 → 1.0.11** (RUSTSEC-2026-0382,
@@ -424,6 +428,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.26]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.26
 [v1.5.25]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.25
 [v1.5.24]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.24
 [v1.5.23]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.23
