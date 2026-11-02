@@ -3,6 +3,18 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.25] — 2026-11-02 (security + dependency updates)
+### Security
+- **rustls-webpki 0.103.15 → 0.103.16** and **webpki-root-certs 1.0.9 → 1.0.11** (RUSTSEC-2026-0382,
+  -0383): certificate paths through the distrusted emSign intermediates, whose private keys are public,
+  are now rejected and the emSign ECC root is gone from the bundled roots. This covers MQTT over TLS/WSS
+  and the updater's HTTPS. The old rustls-webpki 0.102.8 copy that rumqttc pins is only used for its
+  error type, so `cargo audit` ignores RUSTSEC-2026-0382 for that copy.
+- **tauri-plugin-updater 2.14.0 → 2.14.1**, which moves zip from 4.6.1 to 9.2.2 (RUSTSEC-2026-0429 and
+  GHSA-m665-v7pm-7grj, plus the earlier RUSTSEC-2026-0367/0368/0369, which are no longer ignored). The
+  updater checks an update's signature before it unpacks anything, so none of these was reachable
+  without our signing key.
+
 ## [v1.5.24] — 2026-11-02 (dependency updates)
 ### Dependencies
 - Bump @tauri-apps/plugin-updater (#81)
@@ -412,6 +424,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.25]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.25
 [v1.5.24]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.24
 [v1.5.23]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.23
 [v1.5.22]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.22
