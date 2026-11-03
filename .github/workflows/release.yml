@@ -18,6 +18,14 @@ jobs:
     name: Build (${{ matrix.label }})
     strategy:
       fail-fast: false
+      # One build at a time, because tauri-action publishes without any locking.
+      # Each job creates the release if getReleaseByTag finds none, and rewrites
+      # latest.json by downloading it, adding its own platforms and uploading it
+      # again. Two jobs that finish together therefore either both create the
+      # release (one fails with "already_exists", as x64 did for v1.5.26, leaving
+      # latest.json with arm64 only), or each upload a latest.json without the
+      # other's platforms. Serial builds take ~10 min longer.
+      max-parallel: 1
       matrix:
         include:
           - target: x86_64-pc-windows-msvc
