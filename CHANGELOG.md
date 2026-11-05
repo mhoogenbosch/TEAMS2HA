@@ -3,6 +3,24 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.27] — 2026-11-05 (a meeting join Teams loses track of is now still a meeting)
+### Fixed
+- **A meeting you join is now a meeting even when Teams loses the call on the outgoing side.** Joining a
+  meeting logged `requestStartCall` for one call id and then `ReportOutgoingCallConnected` for a different
+  id that Teams' own coordinator did not know (`<ERR> reportOutgoingCallConnected called, call does not
+  exist, unexpected callId`). No `NotifyCallActive` followed, so `isinmeeting` stayed off for the whole
+  meeting and the office speaker was never turned down. `ReportOutgoingCallConnected` is now a call-active
+  marker alongside `NotifyCallActive`, `reportCallActive` and `reportCallAccepted`. (NL: join je een
+  meeting en raakt Teams die intern kwijt, dan ziet de app het nu alsnog als meeting.)
+  - Same class as v1.5.6, which covered the incoming side (`reportCallAccepted`). Observed 2026-11-05; the
+    call ended half an hour later with `reportCallEnded` for the connected id, which already counts as an
+    end-line.
+  - Safe as a start marker: in 47 Teams logs (2026-10-07 to 2026-11-05) every other
+    `ReportOutgoingCallConnected` was followed by `NotifyCallActive` for the same id, so on a healthy join it
+    starts the meeting a moment earlier and the active line becomes a no-op.
+  - `requestStartCall` is deliberately not a marker: that id is not the one that connected, and it never
+    ends (Teams puts it on hold when the next call starts). Two tests with the verbatim lines pin both cases.
+
 ## [v1.5.26] — 2026-11-02 (dependency updates)
 ### Dependencies
 - Bump the cargo-minor-patch group across 1 directory with 4 updates (#86)
@@ -428,6 +446,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.27]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.27
 [v1.5.26]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.26
 [v1.5.25]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.25
 [v1.5.24]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.24
