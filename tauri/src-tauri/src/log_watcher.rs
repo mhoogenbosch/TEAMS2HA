@@ -48,6 +48,28 @@ pub enum LogEvent {
 /// behaving it arrives just before `NotifyCallActive`, which makes the start a
 /// second earlier and the second line a no-op. The end side needs no change:
 /// `reportCallEnded` already matches on the `CallEnded` substring.
+///
+/// # Why `ReportOutgoingCallConnected` counts as active
+///
+/// The same loss happens on the outgoing side, where joining a meeting
+/// produces no `reportCallAccepted`. Observed 2026-11-05: the join logged
+/// `requestStartCall` for one id and then
+///
+/// ```text
+/// ReportOutgoingCallConnected for callId: 36086b28…
+/// <ERR> reportOutgoingCallConnected called, call does not exist, unexpected callId: 36086b28…
+/// ```
+///
+/// for a *different* id, which Teams' coordinator did not know. No
+/// `NotifyCallActive` followed. Half an hour later the call ended with
+/// `reportCallEnded` for that same id. In the 47 Teams logs from 2026-10-07 to
+/// 2026-11-05, every other `ReportOutgoingCallConnected` was followed by
+/// `NotifyCallActive` for the same id. "Connected" only ever means a call that
+/// is up, so it is as safe a start marker as `reportCallAccepted`. The match is
+/// on `OutgoingCallConnected` so that both the INFO line and the ERR line
+/// (lower-case `report…`) count; they carry the same id. `requestStartCall` is
+/// deliberately *not* a marker: that id is not the one that connected, and it
+/// never ends (Teams puts it on hold when the next call starts).
 #[derive(Default)]
 struct CallState {
     /// Ids seen in a `NotifyCallActive` line, with the moment they were seen —
@@ -82,6 +104,7 @@ impl CallState {
         if line.contains("NotifyCallActive")
             || line.contains("reportCallActive")
             || line.contains("reportCallAccepted")
+            || line.contains("OutgoingCallConnected")
         {
             match extract_call_id(line) {
                 Some(id) => {
@@ -486,6 +509,27 @@ mod tests {
     // reportCallAccepted → NotifyCallActive can be replayed in order.
     const ACCEPTED_MEETING: &str =
         "HfpVoipCallCoordinatorImpl: reportCallAccepted for callId: d84becb7-4285-4d44-9d4d-e61364d07d11";
+    // Verbatim from 2026-11-05, a meeting join Teams lost on the outgoing side:
+    // it started one id, connected another one it did not know, and never
+    // wrote NotifyCallActive. The started id was put on hold half an hour
+    // later, when the next call began; it never ended.
+    const JOIN_REQUESTED: &str =
+        "HfpVoipCallCoordinatorImpl: requestStartCall for callId: 585fb82c-c1f8-4937-9766-37b1ab5ffb80, causeId: 60ea317b-d9db-4921-806a-abf872eebcc8, eventId: 3d6f75d7-40c8-4bfd-99b9-f81535be2257";
+    const LOST_CONNECTED: &str =
+        "HfpVoipCallCoordinatorImpl: ReportOutgoingCallConnected for callId: 36086b28-ebb8-469e-badf-83d3dd24c7fd";
+    const LOST_CONNECTED_ERR: &str =
+        "HfpVoipCallCoordinatorImpl: reportOutgoingCallConnected called, call does not exist, unexpected callId: 36086b28-ebb8-469e-badf-83d3dd24c7fdcauseId: 8bd12a85-dfd6-4733-b29b-cd9a71f3bc88";
+    const LOST_CONNECTED_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: reportCallEnded for callId: 36086b28-ebb8-469e-badf-83d3dd24c7fdcauseId: e866ba32-a4a7-4a82-bf05-51bf822b247beventId: 5a4d92dc-d85e-465c-b36d-2899277c5abd";
+    const JOIN_HELD: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallHeld callId: 585fb82c-c1f8-4937-9766-37b1ab5ffb80causeId: f06932f9-7ccc-4c49-8a70-b5edabf74cea";
+    // The same morning's healthy join: connected and active for one id.
+    const CONNECTED_MEETING: &str =
+        "HfpVoipCallCoordinatorImpl: ReportOutgoingCallConnected for callId: 3b102ab8-fceb-4755-b18b-7829971ba005";
+    const CONNECTED_MEETING_ACTIVE: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallActive callId: 3b102ab8-fceb-4755-b18b-7829971ba005causeId: 5cd8e5c7-5e79-43fd-952e-d7fcc3ba2a6c";
+    const CONNECTED_MEETING_ENDED: &str =
+        "HfpVoipCallCoordinatorImpl: NotifyCallEnded callId: 3b102ab8-fceb-4755-b18b-7829971ba005causeId: ceb31ec8-f2f5-48d2-8b7a-f85bb31841cd";
 
     #[test]
     fn extracts_guid_glued_to_cause_id() {
@@ -631,6 +675,36 @@ mod tests {
         assert_eq!(calls.apply(ACTIVE_MEETING), Some(true));
         assert_eq!(calls.apply(DECLINED_ENDED), None);
         assert!(calls.in_call(), "the declined call must not end the meeting");
+    }
+
+    // The 2026-11-05 incident: a meeting join that Teams lost on the outgoing
+    // side. The lines arrive in the order Teams wrote them; the ERR line must
+    // be a no-op, and the requested-then-held id must never touch the state.
+    #[test]
+    fn a_join_teams_lost_still_starts_and_ends_the_meeting() {
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(JOIN_REQUESTED), None);
+        assert!(!calls.in_call(), "requestStartCall is not a start marker");
+
+        assert_eq!(calls.apply(LOST_CONNECTED), Some(true));
+        assert_eq!(calls.apply(LOST_CONNECTED_ERR), None);
+        assert!(calls.in_call());
+
+        assert_eq!(calls.apply(LOST_CONNECTED_ENDED), Some(false));
+        assert!(!calls.in_call());
+        assert_eq!(calls.apply(JOIN_HELD), None);
+        assert!(!calls.in_call());
+    }
+
+    #[test]
+    fn a_connected_line_before_the_active_line_is_not_a_second_call() {
+        // The healthy join: connected, then active, for the same id. The
+        // active line must be a no-op and one end-line must close the meeting.
+        let mut calls = CallState::default();
+        assert_eq!(calls.apply(CONNECTED_MEETING), Some(true));
+        assert_eq!(calls.apply(CONNECTED_MEETING_ACTIVE), None);
+        assert_eq!(calls.apply(CONNECTED_MEETING_ENDED), Some(false));
+        assert!(!calls.in_call());
     }
 
     // Instants are only ever moved forward here: `Instant::now() - 13h` panics
