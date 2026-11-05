@@ -29,14 +29,31 @@
 //! and takes precedence over the registry whenever it is available — see
 //! `recompute_video` in `lib.rs`.
 //!
+//! # Finding the buttons: by AutomationId, then reading the name
+//!
+//! The two buttons are located by their UIA AutomationId, `microphone-button` and
+//! `video-button`, which is the same in every UI language. Their accessible name is then
+//! read for the state. Searching all buttons by name instead (as before 2026-11-05) had
+//! two problems:
+//!
+//! * a Dutch Teams UI matched nothing, so neither reading ever worked there;
+//! * the meeting window also has a notification button (AutomationId `mute_button`,
+//!   "Deze meldingen dempen" in Dutch) whose name contains the word for "mute". Matched by
+//!   name, it can be taken for the mic button.
+//!
+//! The buttons have no `TogglePattern` (only Invoke and ScrollItem), so the name is still
+//! the only state signal. English and Dutch names are recognised; see `classify` and
+//! `classify_camera`. Verified on Teams 26260.1701.5139.3736 with a Dutch UI, 2026-11-05.
+//!
 //! # Known limitations — please read before relying on this
 //!
 //! * **Needs a realised Teams window.** With Teams closed to the tray its processes have
 //!   no window, nothing appears in the UIA tree, and there is no reading at all.
-//! * **Name-based.** A Teams UI rename or a non-English UI breaks it. There is no
-//!   `TogglePattern` on the buttons, so the accessible name is the only available signal.
-//!   The failure mode is benign: no reading rather than a wrong one, so mute falls back
-//!   to `wasapi_monitor` and video to `registry_monitor`, exactly as before.
+//! * **English and Dutch only.** A Teams build without these AutomationIds, or a UI in
+//!   another language, gives no reading. The first name that is found but not recognised
+//!   is logged, so adding a language starts from that log line. The failure mode is
+//!   benign: no reading rather than a wrong one, so mute falls back to `wasapi_monitor`
+//!   and video to `registry_monitor`, exactly as before.
 //! * Reports `Unknown`/`VideoUnknown` rather than a guess whenever a button cannot be
 //!   found, so a missing reading is never mistaken for "unmuted" or "camera off".
 
@@ -64,31 +81,41 @@ pub fn start(tx: mpsc::Sender<UiaEvent>) {
     std::thread::spawn(move || poll_blocking(tx));
 }
 
-/// `Mute mic` → not muted, `Unmute mic` → muted.
+/// The name of the `microphone-button`: `Some(true)` = muted, `Some(false)` = live.
 ///
-/// Order matters: "Unmute mic" also contains "mute", so the unmute test must come first.
+/// | UI language | live              | muted                        |
+/// |-------------|-------------------|------------------------------|
+/// | English     | `Mute mic`        | `Unmute mic`                 |
+/// | Dutch       | `Microfoon dempen`| `Microfoon niet meer dempen` |
+///
+/// Order matters: each muted label also contains the live label's keyword ("Unmute"
+/// contains "mute", "niet meer dempen" contains "dempen"), so the muted test comes first.
 fn classify(name: &str) -> Option<bool> {
     let lower = name.to_lowercase();
-    if lower.contains("unmute") {
+    if lower.contains("unmute") || lower.contains("niet meer dempen") {
         Some(true)
-    } else if lower.contains("mute") {
+    } else if lower.contains("mute") || lower.contains("dempen") {
         Some(false)
     } else {
         None
     }
 }
 
-/// `Turn camera off` → video on, `Turn camera on` → video off.
+/// The name of the `video-button`: `Some(true)` = video on, `Some(false)` = off.
+///
+/// | UI language | video on              | video off            |
+/// |-------------|-----------------------|----------------------|
+/// | English     | `Turn camera off`     | `Turn camera on`     |
+/// | Dutch       | `Camera uitschakelen` | `Camera inschakelen` |
 ///
 /// Action-based naming, same convention as `classify`: the label says what clicking the
-/// button would do, not what the current state is. Match on the whole phrase rather than
-/// just "camera" — Teams' toolbar also carries "Camera settings" and device-picker
-/// buttons, and those must not be read as a state.
+/// button would do, not what the current state is. Whole phrases, not just "camera":
+/// Teams' toolbar also carries "Camera settings" and device-picker buttons.
 fn classify_camera(name: &str) -> Option<bool> {
     let lower = name.to_lowercase();
-    if lower.contains("turn camera off") {
+    if lower.contains("turn camera off") || lower.contains("camera uitschakelen") {
         Some(true)
-    } else if lower.contains("turn camera on") {
+    } else if lower.contains("turn camera on") || lower.contains("camera inschakelen") {
         Some(false)
     } else {
         None
@@ -162,7 +189,13 @@ struct Uia {
     _automation: windows::Win32::UI::Accessibility::IUIAutomation,
     root: windows::Win32::UI::Accessibility::IUIAutomationElement,
     any: windows::Win32::UI::Accessibility::IUIAutomationCondition,
-    buttons: windows::Win32::UI::Accessibility::IUIAutomationCondition,
+    /// AutomationId == `microphone-button`.
+    mic_button: windows::Win32::UI::Accessibility::IUIAutomationCondition,
+    /// AutomationId == `video-button`.
+    video_button: windows::Win32::UI::Accessibility::IUIAutomationCondition,
+    /// Last button name found by AutomationId but not recognised, so it is logged once
+    /// instead of on every poll.
+    unrecognised: std::cell::RefCell<Option<String>>,
 }
 
 #[cfg(windows)]
@@ -171,24 +204,29 @@ impl Uia {
         use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
         use windows::Win32::System::Variant::VARIANT;
         use windows::Win32::UI::Accessibility::{
-            CUIAutomation, IUIAutomation, UIA_ButtonControlTypeId, UIA_ControlTypePropertyId,
+            CUIAutomation, IUIAutomation, UIA_AutomationIdPropertyId,
         };
 
         let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL).ok()?;
         let root = automation.GetRootElement().ok()?;
         let any = automation.CreateTrueCondition().ok()?;
-        let buttons = automation
+        let mic_button = automation
             .CreatePropertyCondition(
-                UIA_ControlTypePropertyId,
-                &VARIANT::from(UIA_ButtonControlTypeId.0),
+                UIA_AutomationIdPropertyId,
+                &VARIANT::from("microphone-button"),
             )
+            .ok()?;
+        let video_button = automation
+            .CreatePropertyCondition(UIA_AutomationIdPropertyId, &VARIANT::from("video-button"))
             .ok()?;
 
         Some(Self {
             _automation: automation,
             root,
             any,
-            buttons,
+            mic_button,
+            video_button,
+            unrecognised: std::cell::RefCell::new(None),
         })
     }
 
@@ -225,9 +263,9 @@ impl Uia {
         (mute, video)
     }
 
-    /// Walks Teams' windows for whichever of the mute/camera buttons `read`'s fast path did
-    /// not already resolve, filling in `mute`/`video` in place and caching whatever is found
-    /// (leaving an already-resolved value and its cache entry untouched).
+    /// Looks in Teams' windows for whichever of the mute/camera buttons `read`'s fast path
+    /// did not already resolve, filling in `mute`/`video` in place and caching whatever is
+    /// found (leaving an already-resolved value and its cache entry untouched).
     unsafe fn search(
         &self,
         cached_mute: &mut Option<windows::Win32::UI::Accessibility::IUIAutomationElement>,
@@ -235,7 +273,7 @@ impl Uia {
         mute: &mut Option<bool>,
         video: &mut Option<bool>,
     ) {
-        use windows::Win32::UI::Accessibility::{TreeScope_Children, TreeScope_Descendants};
+        use windows::Win32::UI::Accessibility::TreeScope_Children;
 
         let top = match self.root.FindAll(TreeScope_Children, &self.any) {
             Ok(t) => t,
@@ -260,40 +298,43 @@ impl Uia {
 
             // Teams has several windows (main, meeting, notifications); only the meeting
             // window carries these buttons, so check them all and take the first hit.
-            let found = match win.FindAll(TreeScope_Descendants, &self.buttons) {
-                Ok(b) => b,
-                Err(_) => continue,
-            };
+            if mute.is_none() {
+                if let Some((btn, m)) = self.find(&win, &self.mic_button, classify) {
+                    *mute = Some(m);
+                    *cached_mute = Some(btn);
+                }
+            }
+            if video.is_none() {
+                if let Some((btn, v)) = self.find(&win, &self.video_button, classify_camera) {
+                    *video = Some(v);
+                    *cached_video = Some(btn);
+                }
+            }
+        }
+    }
 
-            let bn = found.Length().unwrap_or(0);
-            for j in 0..bn {
-                if mute.is_some() && video.is_some() {
-                    break;
-                }
-                let btn = match found.GetElement(j) {
-                    Ok(b) => b,
-                    Err(_) => continue,
-                };
-                let name = match btn.CurrentName() {
-                    Ok(s) => s.to_string(),
-                    Err(_) => continue,
-                };
+    /// The button matching `condition` in `win`, with its state according to `parse`.
+    /// `None` when there is no such button or its name is not recognised; the latter is
+    /// logged once per distinct name.
+    unsafe fn find(
+        &self,
+        win: &windows::Win32::UI::Accessibility::IUIAutomationElement,
+        condition: &windows::Win32::UI::Accessibility::IUIAutomationCondition,
+        parse: fn(&str) -> Option<bool>,
+    ) -> Option<(windows::Win32::UI::Accessibility::IUIAutomationElement, bool)> {
+        use windows::Win32::UI::Accessibility::TreeScope_Descendants;
 
-                // A button matches at most one of the two, so the clone below is only
-                // there to keep `btn` available for the second check — in practice one of
-                // the two arms is always skipped.
-                if mute.is_none() {
-                    if let Some(m) = classify(&name) {
-                        *mute = Some(m);
-                        *cached_mute = Some(btn.clone());
-                    }
+        let btn = win.FindFirst(TreeScope_Descendants, condition).ok()?;
+        let name = btn.CurrentName().ok()?.to_string();
+        match parse(&name) {
+            Some(state) => Some((btn, state)),
+            None => {
+                let mut last = self.unrecognised.borrow_mut();
+                if last.as_deref() != Some(name.as_str()) {
+                    log::warn!("UiaMonitor: Teams button name not recognised: {name:?}");
+                    *last = Some(name);
                 }
-                if video.is_none() {
-                    if let Some(v) = classify_camera(&name) {
-                        *video = Some(v);
-                        *cached_video = Some(btn);
-                    }
-                }
+                None
             }
         }
     }
@@ -313,6 +354,22 @@ mod tests {
         // Verbatim accessible names captured from Teams 26183.1903.4892.4448.
         assert_eq!(classify("Mute mic"), Some(false));
         assert_eq!(classify("Unmute mic"), Some(true));
+    }
+
+    #[test]
+    fn dutch_names_observed_from_teams() {
+        // Verbatim accessible names captured from Teams 26260.1701.5139.3736 with a Dutch
+        // UI on 2026-11-05, during real calls.
+        assert_eq!(classify("Microfoon dempen"), Some(false));
+        assert_eq!(classify("Microfoon niet meer dempen"), Some(true));
+        assert_eq!(classify_camera("Camera uitschakelen"), Some(true));
+        assert_eq!(classify_camera("Camera inschakelen"), Some(false));
+    }
+
+    #[test]
+    fn niet_meer_dempen_wins_over_the_substring_dempen() {
+        // Same trap as unmute/mute: getting this order wrong inverts the sensor.
+        assert_eq!(classify("MICROFOON NIET MEER DEMPEN"), Some(true));
     }
 
     #[test]
@@ -349,6 +406,7 @@ mod tests {
         // The toolbar carries these next to the toggle; reading them as a state would
         // pin is_video_on to whatever they happened to match.
         assert_eq!(classify_camera("Camera settings"), None);
+        assert_eq!(classify_camera("Camera-instellingen"), None);
         assert_eq!(classify_camera("Video effects"), None);
         assert_eq!(classify_camera("Mute mic"), None);
         assert_eq!(classify_camera(""), None);
@@ -362,6 +420,10 @@ mod tests {
             "Unmute mic",
             "Turn camera off",
             "Turn camera on",
+            "Microfoon dempen",
+            "Microfoon niet meer dempen",
+            "Camera uitschakelen",
+            "Camera inschakelen",
         ] {
             assert!(
                 classify(name).is_none() || classify_camera(name).is_none(),

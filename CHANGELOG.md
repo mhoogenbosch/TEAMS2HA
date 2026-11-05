@@ -3,6 +3,31 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.28] — 2026-11-05 (call detection without the registry, and a Dutch Teams UI)
+### Fixed
+- **A call is now detected from Teams' microphone use, also when the app starts in the middle of one.**
+  Windows' privacy registry flag, the mic-in-use signal so far, can go dead: on Windows 11 26H2 (build 26300)
+  Windows wrote no microphone or camera usage for any app after 2026-08-07, which left Teams' log as the
+  only start signal. The app now also reads whether one of Teams' capture sessions is active, and either
+  source counts. Measured over a day of real calls: active within 3 s of joining, inactive within 3 s of
+  hanging up, still active while muted, inactive between calls. It is a live reading, so a call that is
+  already running when the app (re)starts is picked up too. Today an auto-update restarted the app mid-call
+  and `isinmeeting` stayed off for the last five minutes of it. (NL: de app ziet een call nu ook aan het
+  microfoongebruik van Teams, ook als hij midden in een call opstart.)
+  - Ending is unchanged: the meeting ends on the log's end line, or when the microphone is released while
+    the log has no call open.
+  - Teams sometimes captures shortly before the call is joined (once 39 s, most likely the pre-join
+    screen's level meter), so the meeting can start that much earlier.
+- **Mute and camera state now work with a Dutch Teams UI.** The mic and camera buttons are found by their
+  AutomationId (`microphone-button`, `video-button`), which is the same in every language, instead of by
+  an English name. Their names are recognised in English and Dutch: `Microfoon dempen` /
+  `Microfoon niet meer dempen`, `Camera uitschakelen` / `Camera inschakelen`. With a Dutch UI neither
+  reading had ever worked, so `ismuted` did not follow Teams' own mute button and `isvideoon` had not
+  been on since July. Finding the buttons by id also keeps the notification button "Deze meldingen dempen"
+  (AutomationId `mute_button`) from being read as the mic button. A button name that is not recognised is
+  logged once, so another language can be added from that log line. (NL: dempen en camera werken nu ook
+  met Teams in het Nederlands.)
+
 ## [v1.5.27] — 2026-11-05 (a meeting join Teams loses track of is now still a meeting)
 ### Fixed
 - **A meeting you join is now a meeting even when Teams loses the call on the outgoing side.** Joining a
@@ -446,6 +471,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.28]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.28
 [v1.5.27]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.27
 [v1.5.26]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.26
 [v1.5.25]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.25

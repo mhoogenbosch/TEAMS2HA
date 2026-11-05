@@ -836,12 +836,16 @@ async fn handle_wasapi_event(
     app: &AppHandle,
 ) {
     let mut s = shared.write().await;
-    // Always record it, even outside a meeting — see AppState::last_wasapi_muted.
-    s.last_wasapi_muted = match ev {
-        WasapiEvent::MuteChanged(muted) => Some(muted),
+    match ev {
+        // Always record it, even outside a meeting — see AppState::last_wasapi_muted.
+        WasapiEvent::MuteChanged(muted) => s.last_wasapi_muted = Some(muted),
         // Not "muted": recompute_muted decides what an absent session means.
-        WasapiEvent::NoSession => None,
-    };
+        WasapiEvent::NoSession => s.last_wasapi_muted = None,
+        WasapiEvent::CaptureActiveChanged(active) => {
+            s.wasapi_capturing = active;
+            update_mic_in_use(&mut s);
+        }
+    }
     if s.meeting.is_in_meeting {
         recompute_muted(&mut s);
     }
@@ -862,23 +866,48 @@ async fn handle_registry_event(
             recompute_video(&mut s);
         }
         RegistryEvent::MicChanged(active) => {
-            if active && !s.meeting.is_in_meeting {
-                s.meeting.is_in_meeting = true;
-                // Monitors typically have a reading before the mic key flips, so adopt
-                // it rather than starting from a default.
-                recompute_muted(&mut s);
-            } else if !active && !s.log_watcher_in_call {
-                // Mic released and the log watcher isn't holding a call open →
-                // the call has ended. Presence must NOT gate this: Teams keeps
-                // presence at "Busy"/"DoNotDisturb" during and after a call, so
-                // guarding on it left is_in_meeting stuck on forever.
-                s.meeting.is_in_meeting = false;
-                s.meeting.is_muted = false;
-            }
+            s.registry_mic = active;
+            update_mic_in_use(&mut s);
         }
     }
     drop(s);
     publish(mqtt, app, shared, false).await;
+}
+
+/// Start or end a meeting on an edge of "Teams is using the microphone".
+///
+/// Two sources, and either one counts:
+///
+/// * `registry_mic` — the Privacy Consent Store flag (`registry_monitor`). It can go
+///   dead: on the Windows 11 26H2 laptop the measurements in `wasapi_monitor` come from,
+///   Windows stopped writing it for every app on 2026-08-07.
+/// * `wasapi_capturing` — a Teams capture session in `AudioSessionStateActive`
+///   (`wasapi_monitor`, which has the measurements). A live reading, so it also starts a
+///   meeting for a call that was already running when the app (re)started.
+///
+/// Only edges of the combined value act, so one source reporting the same thing again,
+/// or the second source agreeing with the first, changes nothing.
+fn update_mic_in_use(s: &mut AppState) {
+    let in_use = s.registry_mic || s.wasapi_capturing;
+    if in_use == s.mic_in_use {
+        return;
+    }
+    s.mic_in_use = in_use;
+    if in_use {
+        if !s.meeting.is_in_meeting {
+            s.meeting.is_in_meeting = true;
+            // Monitors typically have a reading before the mic flips, so adopt it
+            // rather than starting from a default.
+            recompute_muted(s);
+        }
+    } else if !s.log_watcher_in_call {
+        // Mic released and the log watcher isn't holding a call open → the call has
+        // ended. Presence must NOT gate this: Teams keeps presence at
+        // "Busy"/"DoNotDisturb" during and after a call, so guarding on it left
+        // is_in_meeting stuck on forever.
+        s.meeting.is_in_meeting = false;
+        s.meeting.is_muted = false;
+    }
 }
 
 async fn handle_process_event(
@@ -896,7 +925,7 @@ async fn handle_process_event(
 
 #[cfg(test)]
 mod tests {
-    use super::{recompute_muted, recompute_video};
+    use super::{recompute_muted, recompute_video, update_mic_in_use};
     use crate::app_state::AppState;
 
     fn state(uia: Option<bool>, wasapi: Option<bool>) -> AppState {
@@ -969,5 +998,78 @@ mod tests {
     fn falls_back_to_the_registry_flag_when_uia_has_no_reading() {
         assert!(video_on(None, true));
         assert!(!video_on(None, false));
+    }
+
+    fn capture(s: &mut AppState, active: bool) {
+        s.wasapi_capturing = active;
+        update_mic_in_use(s);
+    }
+
+    fn registry(s: &mut AppState, active: bool) {
+        s.registry_mic = active;
+        update_mic_in_use(s);
+    }
+
+    #[test]
+    fn a_capture_session_going_active_starts_a_meeting() {
+        // The 2026-11-05 case: the app restarted mid-call (an auto-update), the log
+        // watcher deliberately skips history, and the registry flag was dead. The first
+        // capture reading after the start is the only thing that knows about the call.
+        let mut s = AppState::default();
+        capture(&mut s, true);
+        assert!(s.meeting.is_in_meeting);
+    }
+
+    #[test]
+    fn a_released_capture_session_ends_a_meeting_the_log_does_not_hold() {
+        let mut s = AppState::default();
+        capture(&mut s, true);
+        capture(&mut s, false);
+        assert!(!s.meeting.is_in_meeting);
+        assert!(!s.meeting.is_muted);
+    }
+
+    #[test]
+    fn a_released_capture_session_leaves_a_call_the_log_holds() {
+        let mut s = AppState {
+            log_watcher_in_call: true,
+            ..Default::default()
+        };
+        s.meeting.is_in_meeting = true;
+        capture(&mut s, true);
+        capture(&mut s, false);
+        assert!(s.meeting.is_in_meeting, "the log's end line ends this call");
+    }
+
+    #[test]
+    fn the_mic_is_in_use_while_either_source_says_so() {
+        let mut s = AppState::default();
+        registry(&mut s, true);
+        capture(&mut s, true);
+        registry(&mut s, false);
+        assert!(s.meeting.is_in_meeting, "the capture session is still active");
+        capture(&mut s, false);
+        assert!(!s.meeting.is_in_meeting);
+    }
+
+    #[test]
+    fn an_idle_start_reading_does_not_end_a_meeting() {
+        // At start-up the capture monitor reports "not capturing" once. That is not an
+        // edge, so it must not end a meeting the log watcher has just started.
+        let mut s = AppState::default();
+        s.meeting.is_in_meeting = true;
+        capture(&mut s, false);
+        assert!(s.meeting.is_in_meeting);
+    }
+
+    #[test]
+    fn a_repeated_reading_does_not_restart_an_ended_meeting() {
+        // The log ended the call while the mic was still in use; the mic staying in use
+        // is not a new start.
+        let mut s = AppState::default();
+        capture(&mut s, true);
+        s.meeting.is_in_meeting = false;
+        registry(&mut s, true);
+        assert!(!s.meeting.is_in_meeting);
     }
 }
