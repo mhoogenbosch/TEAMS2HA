@@ -31,6 +31,15 @@ pub struct AppState {
     /// `recompute_video`'s fallback for when there is no meeting window to read a camera
     /// button from yet.
     pub last_registry_video: bool,
+    /// The Privacy Consent Store's mic-in-use flag for Teams (see `registry_monitor`).
+    /// One of the two "microphone in use" sources combined by `update_mic_in_use`.
+    pub registry_mic: bool,
+    /// Whether a Teams capture session is active (see `wasapi_monitor`). The other
+    /// "microphone in use" source.
+    pub wasapi_capturing: bool,
+    /// The combined "microphone in use" value last acted on. Only its edges start or end
+    /// a meeting, so it is kept to tell an edge from a repeat.
+    pub mic_in_use: bool,
     /// Last state that was actually delivered to MQTT — used to skip republishing
     /// an unchanged state on every monitor event. Only set after a successful
     /// publish, so a failed publish is retried on the next event.

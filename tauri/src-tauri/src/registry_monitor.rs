@@ -8,8 +8,13 @@
 /// (seen 13-07-2026: Sonos muted + office radio blocked by a call that wasn't there).
 /// Therefore an 'active' reading only counts after the device has been observed inactive
 /// at least once since app start or system resume. Cost: a call that is already ongoing
-/// at (re)start goes undetected until its device usage stops — the presence sensor
-/// ("Busy") still covers that case.
+/// at (re)start goes undetected here until its device usage stops — `wasapi_monitor`'s
+/// capture-session reading covers that case for the microphone.
+///
+/// The keys can also go dead altogether: on the Windows 11 26H2 laptop (build 26300)
+/// this fork is maintained on, Windows wrote no usage for any app after 2026-08-07.
+/// Nothing here can tell that apart from "not in use", which is why the mic flag is only
+/// one of two sources (see `update_mic_in_use` in `lib.rs`).
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Instant, MissedTickBehavior};
