@@ -3,6 +3,10 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.29] — 2026-11-09 (dependency updates)
+### Dependencies
+- Bump log in /tauri/src-tauri in the cargo-minor-patch group (#91)
+
 ## [v1.5.28] — 2026-11-05 (call detection without the registry, and a Dutch Teams UI)
 ### Fixed
 - **A call is now detected from Teams' microphone use, also when the app starts in the middle of one.**
@@ -471,6 +475,7 @@ this fork's own PRs (#95–#99); the commits below are the genuinely new parts, 
 ### Earlier versions (1.0.x – 1.2.x)
 These were the legacy **.NET / WPF** builds of Teams2HA (upstream). They relied on the Microsoft Teams local API, which Microsoft has since deprecated — the reason for the Rust/Tauri rewrite from v1.3.0 onward. The .NET source was removed from this fork after v1.3.7 (still available in the git history and upstream).
 
+[v1.5.29]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.29
 [v1.5.28]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.28
 [v1.5.27]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.27
 [v1.5.26]: https://github.com/mhoogenbosch/TEAMS2HA/releases/tag/v1.5.26
