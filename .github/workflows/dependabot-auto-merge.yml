@@ -1,7 +1,9 @@
 name: Dependabot auto-merge
 
 # Merges Dependabot's minor/patch pull requests once every check on the head
-# commit is green, then asks the Dependency release workflow for a new version.
+# commit is green, then lets the Dependency release workflow decide whether a
+# new version is due (a security update goes out now, version updates wait for
+# the bundled release).
 #
 # Triggered by CI finishing rather than by the pull request itself: workflows
 # started by a Dependabot `pull_request` event get a read-only GITHUB_TOKEN and
@@ -140,6 +142,8 @@ jobs:
 
       # A push made with GITHUB_TOKEN starts no workflow, so the release chain
       # is dispatched explicitly — workflow_dispatch is exempt from that rule.
+      # `due`: dep-release releases right away only for a security update, and
+      # leaves version updates for the bundled release (see dep-release.yml).
       - name: Ask for a dependency release
         if: steps.gate.outputs.proceed == 'true' && steps.scope.outputs.release == 'true'
-        run: gh workflow run dep-release.yml --repo "$REPO" --ref master
+        run: gh workflow run dep-release.yml --repo "$REPO" --ref master -f mode=due

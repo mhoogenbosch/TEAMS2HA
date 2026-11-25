@@ -59,6 +59,13 @@ check is green (majors are left for review), and `dep-release.yml` then writes
 the CHANGELOG section, tags, and dispatches `release.yml`. Feature releases stay
 manual.
 
+Version updates are bundled: `dep-release.yml` releases only when a security
+update for the app is waiting or the last release is 28+ days old, and a daily
+scheduled run catches the moment it becomes due. Every release is a new unsigned
+binary that Defender can quarantine, which a user without admin rights cannot
+undo, so do not go back to one release per merge. "Run workflow" (mode `now`)
+still releases immediately.
+
 Two constraints shape that chain, both easy to "simplify" into a broken state:
 
 - A push made with `GITHUB_TOKEN` cannot trigger another workflow, so the

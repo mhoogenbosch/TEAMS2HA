@@ -5,7 +5,17 @@ Called by .github/workflows/dep-release.yml after Dependabot pull requests have
 been merged into master. Reports `release` and `version` through GITHUB_OUTPUT
 and leaves the tree untouched when there is nothing to release.
 
-Two cases:
+RELEASE_MODE decides whether the merged bumps go out now:
+
+* `now` (a run started by hand): release whatever bumps are on master.
+* `due` (the daily schedule, and the dispatch after each Dependabot merge):
+  release only when a security update for the app is waiting, or when the last
+  release is at least BUNDLE_DAYS old. Every release is a new unsigned binary
+  that Defender can quarantine as a false positive, and on a laptop without
+  admin rights nobody can restore it, so version updates are bundled instead
+  of shipped per group (v1.5.29 to v1.5.33: five releases in two weeks).
+
+Two cases once a release goes out:
 
 * The newest CHANGELOG section is already tagged, so the merged bumps are the
   only unreleased change: a new patch section is opened for them.
@@ -19,10 +29,12 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 REPO_URL = "https://github.com/mhoogenbosch/TEAMS2HA"
 CHANGELOG = "CHANGELOG.md"
+# In `due` mode, version updates wait until the last release is this old.
+BUNDLE_DAYS = 28
 
 SECTION = re.compile(r"^## \[(v\d+\.\d+\.\d+)\]")
 SECTION_DATE = re.compile(r"^(## \[v\d+\.\d+\.\d+\]\s+—\s+)\d{4}-\d{2}-\d{2}(.*)$")
@@ -32,6 +44,9 @@ LINK_LINE = re.compile(r"^\[v\d+\.\d+\.\d+\]:")
 # plus Dependabot's own unprefixed "Bump x from 1 to 2".
 DEP_PREFIX = re.compile(r"^(?:chore|build|ci)\((?:deps|deps-dev|actions)\):\s*", re.I)
 BUMP_SUBJECT = re.compile(r"^bump\s", re.I)
+# Dependabot's trailer in the commit body; the squash merge keeps it.
+UPDATED_DEPS = re.compile(r"^updated-dependencies:", re.M)
+UPDATE_TYPE = re.compile(r"^\s*update-type:\s*version-update:", re.M)
 
 
 def git(*args: str) -> str:
@@ -64,6 +79,60 @@ def next_patch(tag: str) -> str:
 
 def commit_subjects(since: str) -> list[str]:
     return [s.strip() for s in git("log", f"{since}..HEAD", "--format=%s").splitlines()]
+
+
+def app_dependency_messages(since: str) -> list[str]:
+    """Full messages of the dependency commits since `since` that touch tauri/.
+
+    An Actions bump changes no binary, so it is no reason to release; it still
+    ships along in the CHANGELOG when a release does go out.
+    """
+    messages = []
+    for sha in git("log", f"{since}..HEAD", "--format=%H", "--", "tauri/").split():
+        message = git("log", "-1", "--format=%B", sha)
+        subject = message.split("\n", 1)[0]
+        if DEP_PREFIX.match(subject) or BUMP_SUBJECT.match(subject):
+            messages.append(message)
+    return messages
+
+
+def is_security_update(message: str) -> bool:
+    """A Dependabot trailer without `update-type` marks a security update.
+
+    Version updates always state their update type; security updates arrive
+    outside the weekly groups and leave it out. dependabot-auto-merge.yml relies
+    on the same tell (#62).
+    """
+    return bool(UPDATED_DEPS.search(message)) and not UPDATE_TYPE.search(message)
+
+
+def release_due(tag: str) -> bool:
+    """`due` mode: is there an app update that should go out now?"""
+    messages = app_dependency_messages(tag)
+    if not messages:
+        print(f"No dependency update since {tag} touches the app — nothing to release.")
+        return False
+
+    security = [m.split("\n", 1)[0] for m in messages if is_security_update(m)]
+    if security:
+        print(f"Security update waiting, releasing now: {security[0]}")
+        return True
+
+    # creatordate: the tagger date of an annotated tag, the commit date of a
+    # lightweight one (which is what dep-release.yml pushes).
+    stamp = git("for-each-ref", "--format=%(creatordate:unix)", f"refs/tags/{tag}")
+    released = datetime.fromtimestamp(int(stamp), timezone.utc)
+    age = (datetime.now(timezone.utc) - released).days
+    if age >= BUNDLE_DAYS:
+        print(f"{tag} is {age} days old — releasing the bundled updates.")
+        return True
+
+    due = (released + timedelta(days=BUNDLE_DAYS)).date().isoformat()
+    print(
+        f"::notice::{len(messages)} app update(s) waiting. {tag} is {age} days old, so they "
+        f"go out on {due}, or earlier with a security or feature release."
+    )
+    return False
 
 
 def dependency_bullets(subjects: list[str]) -> tuple[list[str], list[str]]:
@@ -132,7 +201,8 @@ def tauri_mismatches() -> list[str]:
     one of them merges, master can briefly hold e.g. @tauri-apps/plugin-updater
     2.14 next to tauri-plugin-updater 2.13. Releasing then tags a version whose
     build is certain to fail: v1.5.21 on 2026-10-19. Waiting is enough, because
-    the other group's merge dispatches this workflow again.
+    the other group's merge dispatches this workflow again, and the daily
+    scheduled run retries as well.
     """
     try:
         lock = json.load(open("tauri/package-lock.json", encoding="utf-8"))
@@ -173,12 +243,22 @@ def main() -> int:
         emit(release="false")
         return 0
 
+    mode = os.environ.get("RELEASE_MODE") or "due"
+    if mode not in ("now", "due"):
+        print(f"::error::Unknown RELEASE_MODE '{mode}' — expected 'now' or 'due'.")
+        emit(release="false")
+        return 1
+    if mode == "due" and not release_due(tag):
+        emit(release="false")
+        return 0
+
     mismatched = tauri_mismatches()
     if mismatched:
         for pair in mismatched:
             print(f"::notice::Waiting for the matching bump: {pair}")
         print("Not releasing yet: the npm and Rust sides of Tauri differ in major.minor, so the "
-              "build would fail. The other ecosystem's Dependabot merge will start this again.")
+              "build would fail. The other ecosystem's Dependabot merge or the next scheduled "
+              "run starts this again.")
         emit(release="false")
         return 0
 

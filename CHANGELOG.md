@@ -3,6 +3,15 @@
 All notable changes to this fork ([mhoogenbosch/TEAMS2HA](https://github.com/mhoogenbosch/TEAMS2HA)) are documented here.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/). Original app by [jimmyeao](https://github.com/jimmyeao/TEAMS2HA).
 
+## [v1.5.34] — 2026-11-25 (dependency updates, now bundled)
+### Changed
+- **Dependency updates now ship as one bundled release every four weeks** instead of one release per
+  Dependabot group, which gave five releases in two weeks (v1.5.29 to v1.5.33). Security updates are
+  still released right away. Every release is a new unsigned binary that Microsoft Defender can quarantine
+  as a false positive, and on a laptop without admin rights the user cannot restore it, so fewer releases
+  means fewer chances of that. (NL: dependency-updates komen nu gebundeld, eens per vier weken;
+  beveiligingsupdates blijven direct.)
+
 ## [v1.5.33] — 2026-11-23 (dependency updates)
 ### Dependencies
 - Bump the npm-minor-patch group in /tauri with 3 updates (#95)

@@ -11,10 +11,10 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
-    # One pull request for all minor+patch bumps: those are auto-merged and each
-    # merge produces a release build, so grouping keeps that to one release per
-    # week per ecosystem instead of one per crate. Major bumps fall outside the
-    # group, arrive as individual pull requests and are never auto-merged.
+    # One pull request for all minor+patch bumps: those are auto-merged, and
+    # dep-release.yml ships them in one bundled release every 4 weeks (security
+    # updates right away). Major bumps fall outside the group, arrive as
+    # individual pull requests and are never auto-merged.
     groups:
       cargo-minor-patch:
         applies-to: version-updates
